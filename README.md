@@ -78,6 +78,20 @@ llamada mínima.
 - `npm run acceptance` usa un esquema PostgreSQL dedicado (`PG_SCHEMA`) que se elimina solo
   al terminar: no deja datos en tu base real.
 
+## Despliegue en Railway
+
+La app corre en contenedor (Dockerfile en la raíz, con poppler para PDFs):
+
+- **URL:** https://examenes-correccion-production.up.railway.app
+- **Autenticación:** Basic Auth obligatorio (`AUTH_USER` / `AUTH_PASSWORD` en las
+  variables de entorno de Railway; `/api/health` queda exento para healthchecks)
+- **Persistencia:** volumen montado en `/app/data` (archivos) + PostgreSQL remoto
+  (`DATABASE_URL`) — los datos sobreviven a redespliegues
+- **Variables necesarias en Railway:** `DATABASE_URL`, `GEMINI_API_KEY`,
+  `AUTH_USER`, `AUTH_PASSWORD`
+- **Redespliegue:** `npx @railway/cli up -d -y --service <service-id>` o desde el
+  dashboard; `scripts/_deploy-smoke.ts` verifica el recorrido completo remoto
+
 ## Verificación
 
 ```bash
