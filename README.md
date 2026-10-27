@@ -4,8 +4,9 @@ Aplicación **privada y local** para que un profesor de Biología y Bioquímica 
 suba exámenes manuscritos (fotos o PDF), obtenga una propuesta de corrección por apartado,
 la contraste con evaluaciones independientes de varios LLM y apruebe/exporte la calificación.
 
-Todo corre en tu equipo: la base de datos y los archivos de los alumnos viven en `./data`.
-No hay servidor remoto, cuentas de alumnos, facturación ni entrenamiento de modelos.
+Los metadatos (clases, actividades, notas) viven en **PostgreSQL** (`DATABASE_URL`) y los
+archivos de los alumnos en `./data`. No hay servidor propio, cuentas de alumnos, facturación
+ni entrenamiento de modelos.
 
 ## Recorrido cubierto
 
@@ -23,6 +24,7 @@ No hay servidor remoto, cuentas de alumnos, facturación ni entrenamiento de mod
 ## Requisitos
 
 - Node.js 20+ y npm.
+- Una base de **PostgreSQL** (Neon, RDS, local o Docker) con su `DATABASE_URL`.
 - `pdftoppm` (poppler-utils) para convertir PDF a imágenes. En Debian/Ubuntu:
   `sudo apt install poppler-utils`.
 - Claves de API **opcionales**. Sin claves, la app funciona con el proveedor **`simulado`**,
@@ -32,7 +34,7 @@ No hay servidor remoto, cuentas de alumnos, facturación ni entrenamiento de mod
 
 ```bash
 npm install
-cp .env.example .env      # opcional: añade claves de OpenAI/Anthropic/Gemini
+cp .env.example .env      # define DATABASE_URL (obligatoria) y, si quieres, claves LLM
 npm run dev               # API en :8787 + interfaz Vite en http://localhost:5173
 ```
 
@@ -61,7 +63,8 @@ llamada mínima.
 
 ### Privacidad
 
-- La base de datos y los exámenes quedan en `./data` (excluido de git).
+- Los metadatos residen en tu base de datos PostgreSQL (`DATABASE_URL`); los exámenes
+  (originales y páginas PNG) quedan en `./data` (excluido de git).
 - Los prompts envían **seudónimos** (Alumno A, B…), nunca nombres ni correos.
 - Las **imágenes** sí se envían al proveedor en la nube configurado. Si no quieres que salgan
   del equipo, usa solo el proveedor `simulado`.
@@ -69,9 +72,11 @@ llamada mínima.
 
 ## Datos y copias de seguridad
 
-- `data/app.db` — base de datos SQLite.
-- `data/files/` — originales y páginas PNG.
-- `data/` está en `.gitignore`. Para respaldar, copia esa carpeta con la app parada.
+- Base de datos: **PostgreSQL** vía `DATABASE_URL` (tablas creadas automáticamente al arrancar).
+- `data/files/` — originales y páginas PNG de los exámenes (excluido de git).
+- Para respaldar, exporta la base de datos (pg_dump) y copia `data/` con la app parada.
+- `npm run acceptance` usa un esquema PostgreSQL dedicado (`PG_SCHEMA`) que se elimina solo
+  al terminar: no deja datos en tu base real.
 
 ## Verificación
 
@@ -88,14 +93,15 @@ corrección, y comprueba el CSV y el PDF exportados. Usa un directorio temporal 
 ## Estructura
 
 ```
-server/            Fastify: rutas, SQLite, almacenamiento, proveedores LLM, cola y exportación
+server/            Fastify: rutas, PostgreSQL, almacenamiento, proveedores LLM, cola y exportación
+  db.ts            pool de pg, migraciones, ajustes
   llm/             OpenAI, Anthropic, Gemini, simulado + prompts
   pipeline/        cola de lotes, corrección por entrega, agregación
   export/          CSV y PDF con pdfkit
 client/            React + Vite (SPA en español)
 shared/types.ts    Tipos compartidos
 scripts/           Recorrido de aceptación
-data/              Datos locales (no versionado)
+data/              Archivos locales (no versionado)
 ```
 
 ## Límites conocidos

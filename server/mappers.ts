@@ -23,13 +23,13 @@ interface ClassDb {
   student_count: number;
 }
 
-export function listClasses(): ClassRow[] {
-  const rows = db
+export async function listClasses(): Promise<ClassRow[]> {
+  const rows = await db
     .prepare(
       `SELECT c.*, (SELECT COUNT(*) FROM students s WHERE s.class_id = c.id) AS student_count
-       FROM classes c ORDER BY c.name COLLATE NOCASE ASC`,
+       FROM classes c ORDER BY lower(c.name) ASC`,
     )
-    .all() as ClassDb[];
+    .all<ClassDb>();
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -39,15 +39,15 @@ export function listClasses(): ClassRow[] {
   }));
 }
 
-export function listStudents(classId: number): StudentRow[] {
-  const rows = db
-    .prepare('SELECT * FROM students WHERE class_id = ? ORDER BY sort_order ASC, id ASC')
-    .all(classId) as {
-    id: number;
-    class_id: number;
-    name: string;
-    sort_order: number;
-  }[];
+export async function listStudents(classId: number): Promise<StudentRow[]> {
+  const rows = await db
+    .prepare('SELECT * FROM students WHERE class_id = $1 ORDER BY sort_order ASC, id ASC')
+    .all<{
+      id: number;
+      class_id: number;
+      name: string;
+      sort_order: number;
+    }>(classId);
   return rows.map((row) => ({
     id: row.id,
     classId: row.class_id,
@@ -94,64 +94,61 @@ const ACTIVITY_SELECT = `
   FROM activities a LEFT JOIN classes c ON c.id = a.class_id
 `;
 
-export function listActivities(): ActivityRow[] {
-  const rows = db.prepare(`${ACTIVITY_SELECT} ORDER BY a.id DESC`).all() as ActivityDb[];
+export async function listActivities(): Promise<ActivityRow[]> {
+  const rows = await db.prepare(`${ACTIVITY_SELECT} ORDER BY a.id DESC`).all<ActivityDb>();
   return rows.map(mapActivity);
 }
 
-export function getActivityRow(activityId: number): ActivityRow | null {
-  const row = db.prepare(`${ACTIVITY_SELECT} WHERE a.id = ?`).get(activityId) as
-    | ActivityDb
-    | undefined;
+export async function getActivityRow(activityId: number): Promise<ActivityRow | null> {
+  const row = await db
+    .prepare(`${ACTIVITY_SELECT} WHERE a.id = $1`)
+    .get<ActivityDb>(activityId);
   return row ? mapActivity(row) : null;
 }
 
-export function listRubric(activityId: number): RubricItem[] {
-  return db
-    .prepare('SELECT * FROM rubric_items WHERE activity_id = ? ORDER BY ord ASC, id ASC')
-    .all(activityId)
-    .map((row) => {
-      const item = row as {
-        id: number;
-        activity_id: number;
-        ord: number;
-        title: string;
-        description: string;
-        max_points: number;
-      };
-      return {
-        id: item.id,
-        activityId: item.activity_id,
-        ord: item.ord,
-        title: item.title,
-        description: item.description,
-        maxPoints: item.max_points,
-      };
-    });
+export async function listRubric(activityId: number): Promise<RubricItem[]> {
+  const rows = await db
+    .prepare('SELECT * FROM rubric_items WHERE activity_id = $1 ORDER BY ord ASC, id ASC')
+    .all<{
+      id: number;
+      activity_id: number;
+      ord: number;
+      title: string;
+      description: string;
+      max_points: number;
+    }>(activityId);
+  return rows.map((item) => ({
+    id: item.id,
+    activityId: item.activity_id,
+    ord: item.ord,
+    title: item.title,
+    description: item.description,
+    maxPoints: item.max_points,
+  }));
 }
 
-export function listDocuments(activityId: number): DocumentRow[] {
-  const rows = db
+export async function listDocuments(activityId: number): Promise<DocumentRow[]> {
+  const rows = await db
     .prepare(
       `SELECT d.*,
          (SELECT COUNT(*) FROM files f WHERE f.owner_type = 'document' AND f.owner_id = d.id AND f.kind = 'page') AS page_count,
          (SELECT original_name FROM files f WHERE f.owner_type = 'document' AND f.owner_id = d.id AND f.kind = 'original' LIMIT 1) AS original_name,
          (SELECT mime FROM files f WHERE f.owner_type = 'document' AND f.owner_id = d.id AND f.kind = 'original' LIMIT 1) AS mime,
          (SELECT id FROM files f WHERE f.owner_type = 'document' AND f.owner_id = d.id AND f.kind = 'original' LIMIT 1) AS original_file_id
-       FROM activity_documents d WHERE d.activity_id = ? ORDER BY d.id ASC`,
+       FROM activity_documents d WHERE d.activity_id = $1 ORDER BY d.id ASC`,
     )
-    .all(activityId) as {
-    id: number;
-    activity_id: number;
-    kind: string;
-    name: string;
-    text: string | null;
-    page_count: number;
-    original_name: string | null;
-    mime: string | null;
-    original_file_id: number | null;
-    created_at: string;
-  }[];
+    .all<{
+      id: number;
+      activity_id: number;
+      kind: string;
+      name: string;
+      text: string | null;
+      page_count: number;
+      original_name: string | null;
+      mime: string | null;
+      original_file_id: number | null;
+      created_at: string;
+    }>(activityId);
   return rows.map((row) => ({
     id: row.id,
     activityId: row.activity_id,
@@ -166,56 +163,22 @@ export function listDocuments(activityId: number): DocumentRow[] {
   }));
 }
 
-export function listSubmissions(activityId: number): SubmissionRow[] {
-  const rows = db
-    .prepare(
-      `SELECT s.*, st.name AS student_name,
-         (SELECT COUNT(*) FROM files f WHERE f.owner_type = 'submission' AND f.owner_id = s.id AND f.kind = 'page') AS file_count
-       FROM submissions s JOIN students st ON st.id = s.student_id
-       WHERE s.activity_id = ? ORDER BY st.name COLLATE NOCASE ASC`,
-    )
-    .all(activityId) as {
-    id: number;
-    activity_id: number;
-    student_id: number;
-    student_name: string;
-    status: string;
-    error: string | null;
-    created_at: string;
-    file_count: number;
-  }[];
-  return rows.map((row) => ({
-    id: row.id,
-    activityId: row.activity_id,
-    studentId: row.student_id,
-    studentName: row.student_name,
-    status: row.status as SubmissionRow['status'],
-    error: row.error,
-    createdAt: row.created_at,
-    fileCount: row.file_count,
-  }));
+const SUBMISSION_SELECT = `SELECT s.*, st.name AS student_name,
+   (SELECT COUNT(*) FROM files f WHERE f.owner_type = 'submission' AND f.owner_id = s.id AND f.kind = 'page') AS file_count
+   FROM submissions s JOIN students st ON st.id = s.student_id`;
+
+interface SubmissionDb {
+  id: number;
+  activity_id: number;
+  student_id: number;
+  student_name: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+  file_count: number;
 }
 
-export function getSubmissionRow(submissionId: number): SubmissionRow | null {
-  const row = db
-    .prepare(
-      `SELECT s.*, st.name AS student_name,
-         (SELECT COUNT(*) FROM files f WHERE f.owner_type = 'submission' AND f.owner_id = s.id AND f.kind = 'page') AS file_count
-       FROM submissions s JOIN students st ON st.id = s.student_id WHERE s.id = ?`,
-    )
-    .get(submissionId) as
-    | {
-        id: number;
-        activity_id: number;
-        student_id: number;
-        student_name: string;
-        status: string;
-        error: string | null;
-        created_at: string;
-        file_count: number;
-      }
-    | undefined;
-  if (!row) return null;
+function mapSubmission(row: SubmissionDb): SubmissionRow {
   return {
     id: row.id,
     activityId: row.activity_id,
@@ -228,20 +191,37 @@ export function getSubmissionRow(submissionId: number): SubmissionRow | null {
   };
 }
 
-export function listFiles(ownerType: 'document' | 'submission', ownerId: number): FileRow[] {
-  const rows = db
+export async function listSubmissions(activityId: number): Promise<SubmissionRow[]> {
+  const rows = await db
+    .prepare(`${SUBMISSION_SELECT} WHERE s.activity_id = $1 ORDER BY lower(st.name) ASC`)
+    .all<SubmissionDb>(activityId);
+  return rows.map(mapSubmission);
+}
+
+export async function getSubmissionRow(submissionId: number): Promise<SubmissionRow | null> {
+  const row = await db
+    .prepare(`${SUBMISSION_SELECT} WHERE s.id = $1`)
+    .get<SubmissionDb>(submissionId);
+  return row ? mapSubmission(row) : null;
+}
+
+export async function listFiles(
+  ownerType: 'document' | 'submission',
+  ownerId: number,
+): Promise<FileRow[]> {
+  const rows = await db
     .prepare(
-      'SELECT * FROM files WHERE owner_type = ? AND owner_id = ? ORDER BY kind ASC, page_no ASC, id ASC',
+      'SELECT * FROM files WHERE owner_type = $1 AND owner_id = $2 ORDER BY kind ASC, page_no ASC, id ASC',
     )
-    .all(ownerType, ownerId) as {
-    id: number;
-    owner_type: 'document' | 'submission';
-    owner_id: number;
-    original_name: string;
-    mime: string;
-    kind: 'original' | 'page';
-    page_no: number | null;
-  }[];
+    .all<{
+      id: number;
+      owner_type: 'document' | 'submission';
+      owner_id: number;
+      original_name: string;
+      mime: string;
+      kind: 'original' | 'page';
+      page_no: number | null;
+    }>(ownerType, ownerId);
   return rows.map((row) => ({
     id: row.id,
     ownerType: row.owner_type,
@@ -254,82 +234,83 @@ export function listFiles(ownerType: 'document' | 'submission', ownerId: number)
   }));
 }
 
-export function listEvaluations(submissionId: number): EvaluationRow[] {
-  const evaluations = db
-    .prepare('SELECT * FROM evaluations WHERE submission_id = ? ORDER BY id ASC')
-    .all(submissionId) as {
-    id: number;
-    submission_id: number;
-    role: 'primary' | 'independent';
-    provider: string;
-    model: string;
-    status: string;
-    error: string | null;
-    reading: string | null;
-    overall_comment: string | null;
-    total_points: number | null;
-    started_at: string | null;
-    finished_at: string | null;
-  }[];
+export async function listEvaluations(submissionId: number): Promise<EvaluationRow[]> {
+  const evaluations = await db
+    .prepare('SELECT * FROM evaluations WHERE submission_id = $1 ORDER BY id ASC')
+    .all<{
+      id: number;
+      submission_id: number;
+      role: 'primary' | 'independent';
+      provider: string;
+      model: string;
+      status: string;
+      error: string | null;
+      reading: string | null;
+      overall_comment: string | null;
+      total_points: number | null;
+      started_at: string | null;
+      finished_at: string | null;
+    }>(submissionId);
 
-  return evaluations.map((evaluation) => ({
-    id: evaluation.id,
-    submissionId: evaluation.submission_id,
-    role: evaluation.role,
-    provider: evaluation.provider,
-    model: evaluation.model,
-    status: evaluation.status as EvaluationRow['status'],
-    error: evaluation.error,
-    reading: evaluation.reading,
-    overallComment: evaluation.overall_comment,
-    totalPoints: evaluation.total_points,
-    startedAt: evaluation.started_at,
-    finishedAt: evaluation.finished_at,
-    items: (
-      db
-        .prepare(
-          'SELECT rubric_item_id, points, comment, confidence FROM evaluation_scores WHERE evaluation_id = ?',
-        )
-        .all(evaluation.id) as {
+  const rows: EvaluationRow[] = [];
+  for (const evaluation of evaluations) {
+    const scores = await db
+      .prepare(
+        'SELECT rubric_item_id, points, comment, confidence FROM evaluation_scores WHERE evaluation_id = $1',
+      )
+      .all<{
         rubric_item_id: number;
         points: number;
         comment: string;
         confidence: number | null;
-      }[]
-    ).map((row) => ({
-      rubricItemId: row.rubric_item_id,
-      points: row.points,
-      comment: row.comment,
-      confidence: row.confidence,
-    })),
-  }));
+      }>(evaluation.id);
+    rows.push({
+      id: evaluation.id,
+      submissionId: evaluation.submission_id,
+      role: evaluation.role,
+      provider: evaluation.provider,
+      model: evaluation.model,
+      status: evaluation.status as EvaluationRow['status'],
+      error: evaluation.error,
+      reading: evaluation.reading,
+      overallComment: evaluation.overall_comment,
+      totalPoints: evaluation.total_points,
+      startedAt: evaluation.started_at,
+      finishedAt: evaluation.finished_at,
+      items: scores.map((row) => ({
+        rubricItemId: row.rubric_item_id,
+        points: row.points,
+        comment: row.comment,
+        confidence: row.confidence,
+      })),
+    });
+  }
+  return rows;
 }
 
-export function getGrade(submissionId: number): GradeRow | null {
-  const grade = db
-    .prepare('SELECT * FROM grades WHERE submission_id = ?')
-    .get(submissionId) as
-    | {
-        submission_id: number;
-        total: number;
-        overall_comment: string;
-        status: string;
-        approved_at: string | null;
-        updated_at: string;
-      }
-    | undefined;
+export async function getGrade(submissionId: number): Promise<GradeRow | null> {
+  const grade = await db
+    .prepare('SELECT * FROM grades WHERE submission_id = $1')
+    .get<{
+      submission_id: number;
+      total: number;
+      overall_comment: string;
+      status: string;
+      approved_at: string | null;
+      updated_at: string;
+    }>(submissionId);
   if (!grade) return null;
 
-  const items = db
+  const items = await db
     .prepare(
-      'SELECT rubric_item_id, points, comment, source FROM grade_items WHERE submission_id = ?',
+      'SELECT rubric_item_id, points, comment, source FROM grade_items WHERE submission_id = $1',
     )
-    .all(submissionId) as {
-    rubric_item_id: number;
-    points: number;
-    comment: string;
-    source: string;
-  }[];
+    .all<{
+      rubric_item_id: number;
+      points: number;
+      comment: string;
+      source: string;
+    }>(submissionId);
 
   return {
     submissionId: grade.submission_id,
@@ -347,12 +328,12 @@ export function getGrade(submissionId: number): GradeRow | null {
   };
 }
 
-export function getSubmissionDetail(submissionId: number): SubmissionDetail | null {
-  const submission = getSubmissionRow(submissionId);
+export async function getSubmissionDetail(submissionId: number): Promise<SubmissionDetail | null> {
+  const submission = await getSubmissionRow(submissionId);
   if (!submission) return null;
-  const activity = getActivityRow(submission.activityId);
+  const activity = await getActivityRow(submission.activityId);
   if (!activity) return null;
-  const files = listFiles('submission', submissionId);
+  const files = await listFiles('submission', submissionId);
 
   return {
     submission,
@@ -364,25 +345,25 @@ export function getSubmissionDetail(submissionId: number): SubmissionDetail | nu
       description: activity.description,
     },
     student: { id: submission.studentId, name: submission.studentName },
-    rubric: listRubric(activity.id),
+    rubric: await listRubric(activity.id),
     pages: files.filter((file) => file.kind === 'page'),
     originals: files.filter((file) => file.kind === 'original'),
-    documents: listDocuments(activity.id),
-    evaluations: listEvaluations(submissionId),
-    grade: getGrade(submissionId),
-    divergenceThreshold: getSettings().divergenceThreshold,
+    documents: await listDocuments(activity.id),
+    evaluations: await listEvaluations(submissionId),
+    grade: await getGrade(submissionId),
+    divergenceThreshold: (await getSettings()).divergenceThreshold,
   };
 }
 
-export function getActivityBundle(activityId: number): ActivityBundle | null {
-  const activity = getActivityRow(activityId);
+export async function getActivityBundle(activityId: number): Promise<ActivityBundle | null> {
+  const activity = await getActivityRow(activityId);
   if (!activity) return null;
-  const students = activity.classId ? listStudents(activity.classId) : [];
+  const students = activity.classId ? await listStudents(activity.classId) : [];
   return {
     activity,
-    rubric: listRubric(activityId),
-    documents: listDocuments(activityId),
-    submissions: listSubmissions(activityId),
+    rubric: await listRubric(activityId),
+    documents: await listDocuments(activityId),
+    submissions: await listSubmissions(activityId),
     students,
   };
 }

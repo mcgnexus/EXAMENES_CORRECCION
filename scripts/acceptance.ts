@@ -8,11 +8,15 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import PDFDocument from 'pdfkit';
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), 'examenes-aceptacion-'));
 process.env.DATA_DIR = dataDir;
 process.env.LOG_LEVEL = 'silent';
+// Esquema PostgreSQL dedicado: el recorrido no toca los datos reales y al
+// final se elimina con DROP SCHEMA CASCADE.
+process.env.PG_SCHEMA = `aceptacion_${crypto.randomBytes(6).toString('hex')}`;
 
 const { buildServer } = await import('../server/index.ts');
 
@@ -353,6 +357,10 @@ try {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 } finally {
+  // Elimina el esquema de test antes de cerrar el pool; app.close() cierra
+  // la conexión PostgreSQL (hook onClose → closeDb).
+  const { dropSchema } = await import('../server/db.ts');
+  await dropSchema().catch(() => undefined);
   await app.close();
   await rm(dataDir, { recursive: true, force: true });
 }

@@ -34,8 +34,8 @@ const rubricSchema = z.object({
 
 const documentKind = z.enum(['enunciado', 'solucion', 'rubrica', 'documentacion']);
 
-function assertActivity(activityId: number): void {
-  const row = db.prepare('SELECT id FROM activities WHERE id = ?').get(activityId);
+async function assertActivity(activityId: number): Promise<void> {
+  const row = await db.prepare('SELECT id FROM activities WHERE id = $1').get(activityId);
   if (!row) throw notFound('Actividad no encontrada');
 }
 
@@ -44,7 +44,7 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
 
   app.get('/api/activities/:id', async (request) => {
     const activityId = Number((request.params as { id: string }).id);
-    const bundle = getActivityBundle(activityId);
+    const bundle = await getActivityBundle(activityId);
     if (!bundle) throw notFound('Actividad no encontrada');
     return bundle;
   });
@@ -52,15 +52,15 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
   app.post('/api/activities', async (request, reply) => {
     const body = activitySchema.parse(request.body ?? {});
     if (body.classId) {
-      const exists = db.prepare('SELECT id FROM classes WHERE id = ?').get(body.classId);
+      const exists = await db.prepare('SELECT id FROM classes WHERE id = $1').get(body.classId);
       if (!exists) throw badRequest('La clase indicada no existe');
     }
-    const result = db
+    const created = await db
       .prepare(
         `INSERT INTO activities (title, subject, class_id, description, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       )
-      .run(
+      .get<{ id: number }>(
         body.title,
         body.subject,
         body.classId ?? null,
@@ -69,60 +69,65 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
         nowIso(),
       );
     reply.code(201);
-    return getActivityBundle(Number(result.lastInsertRowid));
+    return getActivityBundle(created?.id ?? 0);
   });
 
   app.patch('/api/activities/:id', async (request) => {
     const activityId = Number((request.params as { id: string }).id);
-    assertActivity(activityId);
+    await assertActivity(activityId);
     const body = activitySchema.partial().parse(request.body ?? {});
     if (body.classId !== undefined && body.classId !== null) {
-      const exists = db.prepare('SELECT id FROM classes WHERE id = ?').get(body.classId);
+      const exists = await db.prepare('SELECT id FROM classes WHERE id = $1').get(body.classId);
       if (!exists) throw badRequest('La clase indicada no existe');
     }
-    const current = db.prepare('SELECT * FROM activities WHERE id = ?').get(activityId) as {
-      title: string;
-      subject: string;
-      class_id: number | null;
-      description: string;
-      status: string;
-    };
-    db.prepare(
-      `UPDATE activities SET title = ?, subject = ?, class_id = ?, description = ?, status = ?
-       WHERE id = ?`,
-    ).run(
-      body.title ?? current.title,
-      body.subject ?? current.subject,
-      body.classId === undefined ? current.class_id : body.classId,
-      body.description ?? current.description,
-      body.status ?? current.status,
-      activityId,
-    );
+    const current = await db
+      .prepare('SELECT * FROM activities WHERE id = $1')
+      .get<{
+        title: string;
+        subject: string;
+        class_id: number | null;
+        description: string;
+        status: string;
+      }>(activityId);
+    if (!current) throw notFound('Actividad no encontrada');
+    await db
+      .prepare(
+        `UPDATE activities SET title = $1, subject = $2, class_id = $3, description = $4, status = $5
+         WHERE id = $6`,
+      )
+      .run(
+        body.title ?? current.title,
+        body.subject ?? current.subject,
+        body.classId === undefined ? current.class_id : body.classId,
+        body.description ?? current.description,
+        body.status ?? current.status,
+        activityId,
+      );
     return getActivityBundle(activityId);
   });
 
   app.delete('/api/activities/:id', async (request, reply) => {
     const activityId = Number((request.params as { id: string }).id);
-    assertActivity(activityId);
-    const documents = db
-      .prepare('SELECT id FROM activity_documents WHERE activity_id = ?')
-      .all(activityId) as { id: number }[];
-    const submissions = db
-      .prepare('SELECT id FROM submissions WHERE activity_id = ?')
-      .all(activityId) as { id: number }[];
+    await assertActivity(activityId);
+    const documents = await db
+      .prepare('SELECT id FROM activity_documents WHERE activity_id = $1')
+      .all<{ id: number }>(activityId);
+    const submissions = await db
+      .prepare('SELECT id FROM submissions WHERE activity_id = $1')
+      .all<{ id: number }>(activityId);
     for (const document of documents) await removeOwnerFiles('document', document.id);
     for (const submission of submissions) await removeOwnerFiles('submission', submission.id);
-    db.prepare('DELETE FROM activities WHERE id = ?').run(activityId);
+    await db.prepare('DELETE FROM activities WHERE id = $1').run(activityId);
     reply.code(204).send();
   });
 
   app.put('/api/activities/:id/rubric', async (request) => {
     const activityId = Number((request.params as { id: string }).id);
-    assertActivity(activityId);
+    await assertActivity(activityId);
     const body = rubricSchema.parse(request.body ?? {});
-    const existing = db
-      .prepare('SELECT id FROM rubric_items WHERE activity_id = ?')
-      .all(activityId) as { id: number }[];
+    const existing = await db
+      .prepare('SELECT id FROM rubric_items WHERE activity_id = $1')
+      .all<{ id: number }>(activityId);
     const keepIds = new Set(body.items.filter((item) => item.id).map((item) => item.id as number));
     const ownedIds = new Set(existing.map((row) => row.id));
 
@@ -132,31 +137,36 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
       }
     }
 
-    db.transaction(() => {
+    await db.transaction(async (tx) => {
       for (const row of existing) {
         if (!keepIds.has(row.id)) {
-          db.prepare('DELETE FROM rubric_items WHERE id = ?').run(row.id);
+          await tx.prepare('DELETE FROM rubric_items WHERE id = $1').run(row.id);
         }
       }
-      body.items.forEach((item, index) => {
+      for (let index = 0; index < body.items.length; index += 1) {
+        const item = body.items[index];
         if (item.id) {
-          db.prepare(
-            'UPDATE rubric_items SET ord = ?, title = ?, description = ?, max_points = ? WHERE id = ?',
-          ).run(index + 1, item.title, item.description ?? '', item.maxPoints, item.id);
+          await tx
+            .prepare(
+              'UPDATE rubric_items SET ord = $1, title = $2, description = $3, max_points = $4 WHERE id = $5',
+            )
+            .run(index + 1, item.title, item.description ?? '', item.maxPoints, item.id);
         } else {
-          db.prepare(
-            'INSERT INTO rubric_items (activity_id, ord, title, description, max_points) VALUES (?, ?, ?, ?, ?)',
-          ).run(activityId, index + 1, item.title, item.description ?? '', item.maxPoints);
+          await tx
+            .prepare(
+              'INSERT INTO rubric_items (activity_id, ord, title, description, max_points) VALUES ($1, $2, $3, $4, $5)',
+            )
+            .run(activityId, index + 1, item.title, item.description ?? '', item.maxPoints);
         }
-      });
-    })();
+      }
+    });
 
     return listRubric(activityId);
   });
 
   app.post('/api/activities/:id/documents', async (request, reply) => {
     const activityId = Number((request.params as { id: string }).id);
-    assertActivity(activityId);
+    await assertActivity(activityId);
     const { fields, files } = await collectMultipart(request);
     const file = files[0];
     if (!file) throw badRequest('Falta el archivo del documento');
@@ -166,18 +176,20 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
     }
     const name = (fields.name ?? file.filename).trim() || file.filename;
 
-    const created = db
+    const created = await db
       .prepare(
-        'INSERT INTO activity_documents (activity_id, kind, name, text, created_at) VALUES (?, ?, ?, NULL, ?)',
+        'INSERT INTO activity_documents (activity_id, kind, name, text, created_at) VALUES ($1, $2, $3, NULL, $4) RETURNING id',
       )
-      .run(activityId, kindParsed.data, name, nowIso());
-    const documentId = Number(created.lastInsertRowid);
+      .get<{ id: number }>(activityId, kindParsed.data, name, nowIso());
+    const documentId = created?.id ?? 0;
 
     const stored = await storeUpload('document', documentId, file);
     if (stored.text !== null) {
-      db.prepare('UPDATE activity_documents SET text = ? WHERE id = ?').run(stored.text, documentId);
+      await db
+        .prepare('UPDATE activity_documents SET text = $1 WHERE id = $2')
+        .run(stored.text, documentId);
     }
-    insertFile({
+    await insertFile({
       ownerType: 'document',
       ownerId: documentId,
       originalName: stored.original.originalName,
@@ -187,7 +199,7 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
       pageNo: null,
     });
     for (const page of stored.pages) {
-      insertFile({
+      await insertFile({
         ownerType: 'document',
         ownerId: documentId,
         originalName: stored.original.originalName,
@@ -199,17 +211,15 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
     }
 
     reply.code(201);
-    return listDocuments(activityId).find((document) => document.id === documentId);
+    return (await listDocuments(activityId)).find((document) => document.id === documentId);
   });
 
   app.delete('/api/documents/:id', async (request, reply) => {
     const documentId = Number((request.params as { id: string }).id);
-    const row = db
-      .prepare('SELECT id FROM activity_documents WHERE id = ?')
-      .get(documentId);
+    const row = await db.prepare('SELECT id FROM activity_documents WHERE id = $1').get(documentId);
     if (!row) throw notFound('Documento no encontrado');
     await removeOwnerFiles('document', documentId);
-    db.prepare('DELETE FROM activity_documents WHERE id = ?').run(documentId);
+    await db.prepare('DELETE FROM activity_documents WHERE id = $1').run(documentId);
     reply.code(204).send();
   });
 }

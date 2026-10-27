@@ -36,22 +36,24 @@ interface GradeItemDb {
   comment: string;
 }
 
-export function buildActivityCsv(activityId: number): { filename: string; content: string } {
-  const activity = db
-    .prepare('SELECT * FROM activities WHERE id = ?')
-    .get(activityId) as { id: number; title: string } | undefined;
+export async function buildActivityCsv(
+  activityId: number,
+): Promise<{ filename: string; content: string }> {
+  const activity = await db
+    .prepare('SELECT * FROM activities WHERE id = $1')
+    .get<{ id: number; title: string }>(activityId);
   if (!activity) throw new Error('Actividad no encontrada');
 
-  const rubric = listRubric(activityId);
+  const rubric = await listRubric(activityId);
   const maxTotal = rubric.reduce((sum, item) => sum + item.maxPoints, 0);
 
-  const submissions = db
+  const submissions = await db
     .prepare(
       `SELECT s.id, st.name AS student_name, s.status
        FROM submissions s JOIN students st ON st.id = s.student_id
-       WHERE s.activity_id = ? ORDER BY st.name COLLATE NOCASE ASC`,
+       WHERE s.activity_id = $1 ORDER BY lower(st.name) ASC`,
     )
-    .all(activityId) as { id: number; student_name: string; status: string }[];
+    .all<{ id: number; student_name: string; status: string }>(activityId);
 
   const itemTitle = (item: RubricItem) => `${item.title} (0-${item.maxPoints})`;
 
@@ -68,12 +70,12 @@ export function buildActivityCsv(activityId: number): { filename: string; conten
   const rows: (string | number | null | undefined)[][] = [header];
 
   for (const submission of submissions) {
-    const grade = db
-      .prepare('SELECT total, overall_comment, status FROM grades WHERE submission_id = ?')
-      .get(submission.id) as GradeRowDb | undefined;
-    const gradeItems = db
-      .prepare('SELECT rubric_item_id, points, comment FROM grade_items WHERE submission_id = ?')
-      .all(submission.id) as GradeItemDb[];
+    const grade = await db
+      .prepare('SELECT total, overall_comment, status FROM grades WHERE submission_id = $1')
+      .get<GradeRowDb>(submission.id);
+    const gradeItems = await db
+      .prepare('SELECT rubric_item_id, points, comment FROM grade_items WHERE submission_id = $1')
+      .all<GradeItemDb>(submission.id);
     const byItem = new Map(gradeItems.map((item) => [item.rubric_item_id, item]));
 
     const total = grade ? grade.total : null;

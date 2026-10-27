@@ -175,7 +175,7 @@ export async function storeUpload(
   };
 }
 
-export function insertFile(input: {
+export async function insertFile(input: {
   ownerType: 'document' | 'submission';
   ownerId: number;
   originalName: string;
@@ -183,13 +183,13 @@ export function insertFile(input: {
   mime: string;
   kind: 'original' | 'page';
   pageNo: number | null;
-}): number {
-  const result = db
+}): Promise<number> {
+  const row = await db
     .prepare(
       `INSERT INTO files (owner_type, owner_id, original_name, stored_path, mime, kind, page_no, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
     )
-    .run(
+    .get<{ id: number }>(
       input.ownerType,
       input.ownerId,
       input.originalName,
@@ -199,7 +199,7 @@ export function insertFile(input: {
       input.pageNo,
       nowIso(),
     );
-  return Number(result.lastInsertRowid);
+  return row?.id ?? 0;
 }
 
 export async function readFileBase64(relPath: string): Promise<string> {
@@ -220,9 +220,11 @@ export async function removeStoredFile(storedPath: string): Promise<void> {
 }
 
 export async function removeOwnerFiles(ownerType: string, ownerId: number): Promise<void> {
-  const rows = db
-    .prepare('SELECT stored_path FROM files WHERE owner_type = ? AND owner_id = ?')
-    .all(ownerType, ownerId) as { stored_path: string }[];
+  const rows = await db
+    .prepare('SELECT stored_path FROM files WHERE owner_type = $1 AND owner_id = $2')
+    .all<{ stored_path: string }>(ownerType, ownerId);
   for (const row of rows) await removeStoredFile(row.stored_path);
-  db.prepare('DELETE FROM files WHERE owner_type = ? AND owner_id = ?').run(ownerType, ownerId);
+  await db
+    .prepare('DELETE FROM files WHERE owner_type = $1 AND owner_id = $2')
+    .run(ownerType, ownerId);
 }

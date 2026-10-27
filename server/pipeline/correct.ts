@@ -45,13 +45,16 @@ const DOC_LABEL: Record<string, string> = {
   documentacion: 'DOCUMENTACIÓN',
 };
 
-function pageFiles(ownerType: 'submission' | 'document', ownerId: number): FileDbRow[] {
+async function pageFiles(
+  ownerType: 'submission' | 'document',
+  ownerId: number,
+): Promise<FileDbRow[]> {
   return db
     .prepare(
-      `SELECT * FROM files WHERE owner_type = ? AND owner_id = ? AND kind = 'page'
+      `SELECT * FROM files WHERE owner_type = $1 AND owner_id = $2 AND kind = 'page'
        ORDER BY page_no ASC, id ASC`,
     )
-    .all(ownerType, ownerId) as FileDbRow[];
+    .all<FileDbRow>(ownerType, ownerId);
 }
 
 async function toImageParts(
@@ -75,24 +78,24 @@ async function buildGradingInput(
   submissionId: number,
   settings: AppSettings,
 ): Promise<GradingInput> {
-  const submission = db
-    .prepare('SELECT * FROM submissions WHERE id = ?')
-    .get(submissionId) as SubmissionDbRow | undefined;
+  const submission = await db
+    .prepare('SELECT * FROM submissions WHERE id = $1')
+    .get<SubmissionDbRow>(submissionId);
   if (!submission) throw new Error(`Entrega ${submissionId} no encontrada`);
 
-  const activity = db
-    .prepare('SELECT * FROM activities WHERE id = ?')
-    .get(submission.activity_id) as ActivityDbRow | undefined;
+  const activity = await db
+    .prepare('SELECT * FROM activities WHERE id = $1')
+    .get<ActivityDbRow>(submission.activity_id);
   if (!activity) throw new Error('Actividad no encontrada');
 
-  const rubric = listRubric(activity.id);
+  const rubric = await listRubric(activity.id);
   if (rubric.length === 0) throw new Error('La actividad no tiene apartados en la rúbrica');
 
-  const documents = db
-    .prepare('SELECT * FROM activity_documents WHERE activity_id = ? ORDER BY id ASC')
-    .all(activity.id) as DocumentDbRow[];
+  const documents = await db
+    .prepare('SELECT * FROM activity_documents WHERE activity_id = $1 ORDER BY id ASC')
+    .all<DocumentDbRow>(activity.id);
 
-  const studentPages = pageFiles('submission', submissionId);
+  const studentPages = await pageFiles('submission', submissionId);
   if (studentPages.length === 0) {
     throw new Error('La entrega no tiene páginas legibles (sube una foto o un PDF)');
   }
@@ -115,18 +118,18 @@ async function buildGradingInput(
   if (settings.includeImages) {
     images = await toImageParts(studentPages.slice(0, maxPages), 'RESPUESTA DEL ALUMNO', readFileBase64);
     const remaining = Math.max(0, maxPages - images.length);
-    const solutionPages = documents
-      .filter((doc) => doc.kind === 'solucion')
-      .flatMap((doc) => pageFiles('document', doc.id));
+    const solutionDocs = documents.filter((doc) => doc.kind === 'solucion');
+    const solutionPages: FileDbRow[] = [];
+    for (const doc of solutionDocs) solutionPages.push(...(await pageFiles('document', doc.id)));
     if (remaining > 0 && solutionPages.length > 0) {
       images = images.concat(
         await toImageParts(solutionPages.slice(0, remaining), 'SOLUCIÓN DE REFERENCIA', readFileBase64),
       );
     }
     const remaining2 = Math.max(0, maxPages - images.length);
-    const enunciadoPages = documents
-      .filter((doc) => doc.kind === 'enunciado')
-      .flatMap((doc) => pageFiles('document', doc.id));
+    const enunciadoDocs = documents.filter((doc) => doc.kind === 'enunciado');
+    const enunciadoPages: FileDbRow[] = [];
+    for (const doc of enunciadoDocs) enunciadoPages.push(...(await pageFiles('document', doc.id)));
     if (remaining2 > 0 && enunciadoPages.length > 0) {
       images = images.concat(
         await toImageParts(enunciadoPages.slice(0, remaining2), 'ENUNCIADO', readFileBase64),
@@ -138,7 +141,7 @@ async function buildGradingInput(
     subject: activity.subject as Subject,
     activityTitle: activity.title,
     activityDescription: activity.description,
-    rubric: rubric.map((item) => ({
+    rubric: rubric.map((item: RubricItem) => ({
       id: item.id,
       title: item.title,
       description: item.description,
@@ -161,107 +164,118 @@ interface PersistEvaluationInput {
 
 async function runAndPersistEvaluation(payload: PersistEvaluationInput): Promise<number> {
   const { submissionId, role, provider, model, input } = payload;
-  const created = db
+  const created = await db
     .prepare(
       `INSERT INTO evaluations (submission_id, role, provider, model, status, started_at, created_at)
-       VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+       VALUES ($1, $2, $3, $4, 'running', $5, $6) RETURNING id`,
     )
-    .run(submissionId, role, provider, model, nowIso(), nowIso());
-  const evaluationId = Number(created.lastInsertRowid);
+    .get<{ id: number }>(submissionId, role, provider, model, nowIso(), nowIso());
+  const evaluationId = created?.id ?? 0;
 
   try {
     const output = await runProviderEvaluation(provider, model, input);
     const total = round1(output.items.reduce((sum, item) => sum + item.points, 0));
-    db.prepare(
-      `UPDATE evaluations SET status = 'done', reading = ?, overall_comment = ?,
-         total_points = ?, finished_at = ? WHERE id = ?`,
-    ).run(output.reading, output.overallComment, total, nowIso(), evaluationId);
+    await db
+      .prepare(
+        `UPDATE evaluations SET status = 'done', reading = $1, overall_comment = $2,
+         total_points = $3, finished_at = $4 WHERE id = $5`,
+      )
+      .run(output.reading, output.overallComment, total, nowIso(), evaluationId);
 
     const insertScore = db.prepare(
       `INSERT INTO evaluation_scores (evaluation_id, rubric_item_id, points, comment, confidence)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5)`,
     );
     for (const item of output.items) {
-      insertScore.run(evaluationId, item.itemId, item.points, item.comment, item.confidence);
+      await insertScore.run(evaluationId, item.itemId, item.points, item.comment, item.confidence);
     }
     return evaluationId;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    db.prepare(
-      "UPDATE evaluations SET status = 'error', error = ?, finished_at = ? WHERE id = ?",
-    ).run(message.slice(0, 2000), nowIso(), evaluationId);
+    await db
+      .prepare("UPDATE evaluations SET status = 'error', error = $1, finished_at = $2 WHERE id = $3")
+      .run(message.slice(0, 2000), nowIso(), evaluationId);
     throw error;
   }
 }
 
-function loadEvaluations(submissionId: number): EvaluationLike[] {
-  const evaluations = db
-    .prepare('SELECT * FROM evaluations WHERE submission_id = ? ORDER BY id ASC')
-    .all(submissionId) as {
-    id: number;
-    role: 'primary' | 'independent';
-    status: string;
-    overall_comment: string | null;
-  }[];
+async function loadEvaluations(submissionId: number): Promise<EvaluationLike[]> {
+  const evaluations = await db
+    .prepare('SELECT * FROM evaluations WHERE submission_id = $1 ORDER BY id ASC')
+    .all<{
+      id: number;
+      role: 'primary' | 'independent';
+      status: string;
+      overall_comment: string | null;
+    }>(submissionId);
 
-  return evaluations.map((evaluation) => ({
-    role: evaluation.role,
-    status: evaluation.status,
-    overallComment: evaluation.overall_comment,
-    items: db
+  const result: EvaluationLike[] = [];
+  for (const evaluation of evaluations) {
+    const scores = await db
       .prepare(
-        'SELECT rubric_item_id, points, comment FROM evaluation_scores WHERE evaluation_id = ?',
+        'SELECT rubric_item_id, points, comment FROM evaluation_scores WHERE evaluation_id = $1',
       )
-      .all(evaluation.id)
-      .map((row) => {
-        const score = row as { rubric_item_id: number; points: number; comment: string };
-        return {
+      .all<{ rubric_item_id: number; points: number; comment: string }>(evaluation.id);
+    result.push({
+      role: evaluation.role,
+      status: evaluation.status,
+      overallComment: evaluation.overall_comment,
+      items: scores.map(
+        (score): ScoreLike => ({
           rubricItemId: score.rubric_item_id,
           points: score.points,
           comment: score.comment,
-        } satisfies ScoreLike;
-      }),
-  }));
+        }),
+      ),
+    });
+  }
+  return result;
 }
 
-function writeProposedGrade(submissionId: number, activityId: number, threshold: number): void {
-  const rubric = listRubric(activityId);
-  const proposed = proposeGrade(rubric, loadEvaluations(submissionId), threshold);
+async function writeProposedGrade(
+  submissionId: number,
+  activityId: number,
+  threshold: number,
+): Promise<void> {
+  const rubric = await listRubric(activityId);
+  const proposed = proposeGrade(rubric, await loadEvaluations(submissionId), threshold);
 
-  const existing = db
-    .prepare('SELECT * FROM grades WHERE submission_id = ?')
-    .get(submissionId) as { id: number; status: string } | undefined;
+  const existing = await db
+    .prepare('SELECT * FROM grades WHERE submission_id = $1')
+    .get<{ id: number; status: string }>(submissionId);
   if (existing && (existing.status === 'approved' || existing.status === 'exported')) {
     return;
   }
 
-  db.prepare(
-    `INSERT INTO grades (submission_id, total, overall_comment, status, updated_at)
-     VALUES (?, ?, ?, 'draft', ?)
-     ON CONFLICT(submission_id) DO UPDATE SET total = excluded.total,
-       overall_comment = excluded.overall_comment, updated_at = excluded.updated_at`,
-  ).run(submissionId, proposed.total, proposed.overallComment, nowIso());
+  await db
+    .prepare(
+      `INSERT INTO grades (submission_id, total, overall_comment, status, updated_at)
+       VALUES ($1, $2, $3, 'draft', $4)
+       ON CONFLICT(submission_id) DO UPDATE SET total = EXCLUDED.total,
+         overall_comment = EXCLUDED.overall_comment, updated_at = EXCLUDED.updated_at`,
+    )
+    .run(submissionId, proposed.total, proposed.overallComment, nowIso());
 
-  db.prepare('DELETE FROM grade_items WHERE submission_id = ?').run(submissionId);
+  await db.prepare('DELETE FROM grade_items WHERE submission_id = $1').run(submissionId);
   const insert = db.prepare(
     `INSERT INTO grade_items (submission_id, rubric_item_id, points, comment, source)
-     VALUES (?, ?, ?, ?, 'proposal')`,
+     VALUES ($1, $2, $3, $4, 'proposal')`,
   );
   for (const item of proposed.items) {
-    insert.run(submissionId, item.rubricItemId, item.points, item.comment);
+    await insert.run(submissionId, item.rubricItemId, item.points, item.comment);
   }
 }
 
 export async function correctSubmission(submissionId: number): Promise<void> {
-  const settings = getSettings();
-  const submission = db
-    .prepare('SELECT * FROM submissions WHERE id = ?')
-    .get(submissionId) as SubmissionDbRow | undefined;
+  const settings = await getSettings();
+  const submission = await db
+    .prepare('SELECT * FROM submissions WHERE id = $1')
+    .get<SubmissionDbRow>(submissionId);
   if (!submission) throw new Error(`Entrega ${submissionId} no encontrada`);
 
-  db.prepare("UPDATE submissions SET status = 'running', error = NULL WHERE id = ?").run(
-    submissionId,
-  );
+  await db
+    .prepare("UPDATE submissions SET status = 'running', error = NULL WHERE id = $1")
+    .run(submissionId);
   emitEvent({ type: 'submission', submissionId, status: 'running' });
 
   try {
@@ -294,30 +308,29 @@ export async function correctSubmission(submissionId: number): Promise<void> {
       }
     }
 
-    const activity = db
-      .prepare('SELECT * FROM activities WHERE id = ?')
-      .get(submission.activity_id) as { id: number };
-    writeProposedGrade(submissionId, activity.id, settings.divergenceThreshold);
+    const activity = await db
+      .prepare('SELECT id FROM activities WHERE id = $1')
+      .get<{ id: number }>(submission.activity_id);
+    if (!activity) throw new Error('Actividad no encontrada');
+    await writeProposedGrade(submissionId, activity.id, settings.divergenceThreshold);
 
-    const current = db
-      .prepare('SELECT status FROM grades WHERE submission_id = ?')
-      .get(submissionId) as { status: string } | undefined;
+    const current = await db
+      .prepare('SELECT status FROM grades WHERE submission_id = $1')
+      .get<{ status: string }>(submissionId);
     const nextStatus =
       current && (current.status === 'approved' || current.status === 'exported')
         ? current.status
         : 'reviewed';
 
-    db.prepare("UPDATE submissions SET status = ?, error = NULL WHERE id = ?").run(
-      nextStatus,
-      submissionId,
-    );
+    await db
+      .prepare('UPDATE submissions SET status = $1, error = NULL WHERE id = $2')
+      .run(nextStatus, submissionId);
     emitEvent({ type: 'submission', submissionId, status: nextStatus });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    db.prepare("UPDATE submissions SET status = 'error', error = ? WHERE id = ?").run(
-      message.slice(0, 2000),
-      submissionId,
-    );
+    await db
+      .prepare("UPDATE submissions SET status = 'error', error = $1 WHERE id = $2")
+      .run(message.slice(0, 2000), submissionId);
     emitEvent({ type: 'submission', submissionId, status: 'error' });
     throw error;
   }

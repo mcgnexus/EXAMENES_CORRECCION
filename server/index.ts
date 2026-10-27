@@ -5,8 +5,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import multipart from '@fastify/multipart';
 import { ZodError } from 'zod';
-import { ROOT, recoverInterruptedWork } from './db';
+import { ROOT, closeDb, recoverInterruptedWork } from './db';
 import { HttpError } from './errors';
+import { registerAuth } from './auth';
 import { registerClassRoutes } from './routes/classes';
 import { registerActivityRoutes } from './routes/activities';
 import { registerSubmissionRoutes } from './routes/submissions';
@@ -17,7 +18,7 @@ import { registerExportRoutes } from './routes/export';
 import { registerEventRoutes } from './routes/events';
 
 export async function buildServer(): Promise<FastifyInstance> {
-  recoverInterruptedWork();
+  await recoverInterruptedWork();
 
   const app = Fastify({
     logger: {
@@ -33,6 +34,9 @@ export async function buildServer(): Promise<FastifyInstance> {
       fields: 20,
     },
   });
+
+  // Debe registrarse antes que las rutas para que el onRequest les aplique.
+  registerAuth(app);
 
   app.addHook('onSend', async (_request, reply, payload) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -97,6 +101,10 @@ export async function buildServer(): Promise<FastifyInstance> {
           '<p>Servidor API en marcha. Ejecuta <code>npm run dev</code> para abrir la interfaz ' +
           '(Vite en http://localhost:5173) o <code>npm run build</code> para servirla desde aquí.</p>',
       );
+  });
+
+  app.addHook('onClose', async () => {
+    await closeDb();
   });
 
   return app;

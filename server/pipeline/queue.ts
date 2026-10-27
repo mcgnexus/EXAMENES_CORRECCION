@@ -35,44 +35,45 @@ function mapJob(row: JobDbRow): JobRow {
   };
 }
 
-export function getJob(jobId: number): JobRow | null {
-  const row = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobDbRow | undefined;
+export async function getJob(jobId: number): Promise<JobRow | null> {
+  const row = await db.prepare('SELECT * FROM jobs WHERE id = $1').get<JobDbRow>(jobId);
   return row ? mapJob(row) : null;
 }
 
-export function listJobs(limit = 20): JobRow[] {
-  const rows = db
-    .prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT ?')
-    .all(limit) as JobDbRow[];
+export async function listJobs(limit = 20): Promise<JobRow[]> {
+  const rows = await db
+    .prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT $1')
+    .all<JobDbRow>(limit);
   return rows.map(mapJob);
 }
 
-function updateJob(
+async function updateJob(
   jobId: number,
   patch: Partial<Pick<JobRow, 'status' | 'done' | 'error'>>,
   broadcast = true,
-): void {
+): Promise<void> {
   const sets: string[] = [];
   const values: unknown[] = [];
   if (patch.status !== undefined) {
-    sets.push('status = ?');
     values.push(patch.status);
+    sets.push(`status = $${values.length}`);
   }
   if (patch.done !== undefined) {
-    sets.push('done = ?');
     values.push(patch.done);
+    sets.push(`done = $${values.length}`);
   }
   if (patch.error !== undefined) {
-    sets.push('error = ?');
     values.push(patch.error);
+    sets.push(`error = $${values.length}`);
   }
-  sets.push('updated_at = ?');
   values.push(nowIso());
+  sets.push(`updated_at = $${values.length}`);
   values.push(jobId);
-  db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  const where = `$${values.length}`;
+  await db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id = ${where}`).run(...values);
 
   if (broadcast) {
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (job) {
       emitEvent({
         type: 'job',
@@ -86,24 +87,25 @@ function updateJob(
 }
 
 export async function startCorrectJob(submissionIds: number[]): Promise<JobRow> {
-  const created = db
+  const created = await db
     .prepare(
       `INSERT INTO jobs (kind, status, payload, total, done, created_at, updated_at)
-       VALUES ('correct', 'queued', ?, ?, 0, ?, ?)`,
+       VALUES ('correct', 'queued', $1, $2, 0, $3, $4) RETURNING id`,
     )
-    .run(JSON.stringify({ submissionIds }), submissionIds.length, nowIso(), nowIso());
-  const jobId = Number(created.lastInsertRowid);
+    .get<{ id: number }>(JSON.stringify({ submissionIds }), submissionIds.length, nowIso(), nowIso());
 
-  const markQueued = db.prepare("UPDATE submissions SET status = 'queued', error = NULL WHERE id = ?");
-  for (const id of submissionIds) markQueued.run(id);
+  const markQueued = db.prepare(
+    "UPDATE submissions SET status = 'queued', error = NULL WHERE id = $1",
+  );
+  for (const id of submissionIds) await markQueued.run(id);
 
-  void runJob(jobId, submissionIds);
-  return getJob(jobId) as JobRow;
+  void runJob(created?.id ?? 0, submissionIds);
+  return (await getJob(created?.id ?? 0)) as JobRow;
 }
 
 async function runJob(jobId: number, submissionIds: number[]): Promise<void> {
-  updateJob(jobId, { status: 'running' });
-  const settings = getSettings();
+  await updateJob(jobId, { status: 'running' });
+  const settings = await getSettings();
   const concurrency = Math.min(Math.max(1, settings.concurrency), submissionIds.length || 1);
   const queue = [...submissionIds];
   let done = 0;
@@ -123,14 +125,14 @@ async function runJob(jobId: number, submissionIds: number[]): Promise<void> {
         );
       }
       done += 1;
-      updateJob(jobId, { done });
+      await updateJob(jobId, { done });
     }
   };
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
   const allFailed = failures > 0 && failures === submissionIds.length;
-  updateJob(jobId, {
+  await updateJob(jobId, {
     status: allFailed ? 'error' : 'done',
     error: errors.length ? errors.join('\n').slice(0, 4000) : undefined,
   });

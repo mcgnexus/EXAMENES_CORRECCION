@@ -23,46 +23,40 @@ interface ReportData {
   pages: { storedPath: string }[];
 }
 
-function loadReportData(submissionId: number): ReportData {
-  const submission = db
+async function loadReportData(submissionId: number): Promise<ReportData> {
+  const submission = await db
     .prepare(
       `SELECT s.id, s.activity_id, st.name AS student_name
-       FROM submissions s JOIN students st ON st.id = s.student_id WHERE s.id = ?`,
+       FROM submissions s JOIN students st ON st.id = s.student_id WHERE s.id = $1`,
     )
-    .get(submissionId) as
-    | { id: number; activity_id: number; student_name: string }
-    | undefined;
+    .get<{ id: number; activity_id: number; student_name: string }>(submissionId);
   if (!submission) throw new Error('Entrega no encontrada');
 
-  const activity = db
-    .prepare('SELECT * FROM activities WHERE id = ?')
-    .get(submission.activity_id) as
-    | { id: number; title: string; subject: string }
-    | undefined;
+  const activity = await db
+    .prepare('SELECT * FROM activities WHERE id = $1')
+    .get<{ id: number; title: string; subject: string }>(submission.activity_id);
   if (!activity) throw new Error('Actividad no encontrada');
 
-  const rubric = listRubric(activity.id);
+  const rubric = await listRubric(activity.id);
 
-  const gradeRow = db
-    .prepare('SELECT * FROM grades WHERE submission_id = ?')
-    .get(submissionId) as
-    | {
-        total: number;
-        overall_comment: string;
-        status: string;
-        approved_at: string | null;
-      }
-    | undefined;
+  const gradeRow = await db
+    .prepare('SELECT * FROM grades WHERE submission_id = $1')
+    .get<{
+      total: number;
+      overall_comment: string;
+      status: string;
+      approved_at: string | null;
+    }>(submissionId);
 
-  const itemRows = db
-    .prepare('SELECT rubric_item_id, points, comment FROM grade_items WHERE submission_id = ?')
-    .all(submissionId) as { rubric_item_id: number; points: number; comment: string }[];
+  const itemRows = await db
+    .prepare('SELECT rubric_item_id, points, comment FROM grade_items WHERE submission_id = $1')
+    .all<{ rubric_item_id: number; points: number; comment: string }>(submissionId);
 
-  const pages = db
+  const pages = await db
     .prepare(
-      "SELECT stored_path FROM files WHERE owner_type = 'submission' AND owner_id = ? AND kind = 'page' ORDER BY page_no ASC, id ASC",
+      "SELECT stored_path FROM files WHERE owner_type = 'submission' AND owner_id = $1 AND kind = 'page' ORDER BY page_no ASC, id ASC",
     )
-    .all(submissionId) as { stored_path: string }[];
+    .all<{ stored_path: string }>(submissionId);
 
   return {
     activityTitle: activity.title,
@@ -93,7 +87,7 @@ function subjectLabel(subject: string): string {
 export async function buildSubmissionReportPdf(
   submissionId: number,
 ): Promise<{ filename: string; buffer: Buffer }> {
-  const data = loadReportData(submissionId);
+  const data = await loadReportData(submissionId);
   const doc = new PDFDocument({ size: 'A4', margin: 40, info: { Title: `Corrección ${data.studentName}` } });
   const chunks: Buffer[] = [];
   const finished = new Promise<Buffer>((resolve, reject) => {

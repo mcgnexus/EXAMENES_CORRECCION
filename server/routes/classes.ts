@@ -36,10 +36,10 @@ function parseNameLines(text: string): string[] {
   return names;
 }
 
-function assertClass(classId: number): { id: number; name: string; subject: string } {
-  const row = db.prepare('SELECT * FROM classes WHERE id = ?').get(classId) as
-    | { id: number; name: string; subject: string }
-    | undefined;
+async function assertClass(classId: number): Promise<{ id: number; name: string; subject: string }> {
+  const row = await db
+    .prepare('SELECT * FROM classes WHERE id = $1')
+    .get<{ id: number; name: string; subject: string }>(classId);
   if (!row) throw notFound('Clase no encontrada');
   return row;
 }
@@ -49,99 +49,103 @@ export async function registerClassRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/classes', async (request, reply) => {
     const body = classSchema.parse(request.body ?? {});
-    const result = db
-      .prepare('INSERT INTO classes (name, subject, created_at) VALUES (?, ?, ?)')
-      .run(body.name, body.subject, nowIso());
+    const created = await db
+      .prepare('INSERT INTO classes (name, subject, created_at) VALUES ($1, $2, $3) RETURNING id')
+      .get<{ id: number }>(body.name, body.subject, nowIso());
     reply.code(201);
-    return listClasses().find((row) => row.id === Number(result.lastInsertRowid));
+    return (await listClasses()).find((row) => row.id === created?.id);
   });
 
   app.patch('/api/classes/:id', async (request) => {
     const classId = Number((request.params as { id: string }).id);
-    assertClass(classId);
+    await assertClass(classId);
     const body = classSchema.partial().parse(request.body ?? {});
     if (body.name !== undefined) {
-      db.prepare('UPDATE classes SET name = ? WHERE id = ?').run(body.name, classId);
+      await db.prepare('UPDATE classes SET name = $1 WHERE id = $2').run(body.name, classId);
     }
     if (body.subject !== undefined) {
-      db.prepare('UPDATE classes SET subject = ? WHERE id = ?').run(body.subject, classId);
+      await db.prepare('UPDATE classes SET subject = $1 WHERE id = $2').run(body.subject, classId);
     }
-    return listClasses().find((row) => row.id === classId);
+    return (await listClasses()).find((row) => row.id === classId);
   });
 
   app.delete('/api/classes/:id', async (request, reply) => {
     const classId = Number((request.params as { id: string }).id);
-    assertClass(classId);
-    const linked = db
-      .prepare('SELECT COUNT(*) AS total FROM activities WHERE class_id = ?')
-      .get(classId) as { total: number };
-    if (linked.total > 0) {
+    await assertClass(classId);
+    const linked = await db
+      .prepare('SELECT COUNT(*) AS total FROM activities WHERE class_id = $1')
+      .get<{ total: number }>(classId);
+    if ((linked?.total ?? 0) > 0) {
       throw conflict('La clase tiene actividades asociadas. Reasígnalas o bórralas primero.');
     }
-    db.prepare('DELETE FROM classes WHERE id = ?').run(classId);
+    await db.prepare('DELETE FROM classes WHERE id = $1').run(classId);
     reply.code(204).send();
   });
 
   app.get('/api/classes/:id/students', async (request) => {
     const classId = Number((request.params as { id: string }).id);
-    assertClass(classId);
+    await assertClass(classId);
     return listStudents(classId);
   });
 
   app.post('/api/classes/:id/students', async (request, reply) => {
     const classId = Number((request.params as { id: string }).id);
-    assertClass(classId);
+    await assertClass(classId);
     const body = studentSchema.parse(request.body ?? {});
-    const next = db
-      .prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM students WHERE class_id = ?')
-      .get(classId) as { next: number };
-    const result = db
-      .prepare('INSERT INTO students (class_id, name, sort_order, created_at) VALUES (?, ?, ?, ?)')
-      .run(classId, body.name, next.next, nowIso());
+    const next = await db
+      .prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM students WHERE class_id = $1')
+      .get<{ next: number }>(classId);
+    const sortOrder = next?.next ?? 1;
+    const created = await db
+      .prepare(
+        'INSERT INTO students (class_id, name, sort_order, created_at) VALUES ($1, $2, $3, $4) RETURNING id',
+      )
+      .get<{ id: number }>(classId, body.name, sortOrder, nowIso());
     reply.code(201);
-    return { id: Number(result.lastInsertRowid), classId, name: body.name, sortOrder: next.next };
+    return { id: created?.id, classId, name: body.name, sortOrder };
   });
 
   app.post('/api/classes/:id/students/import', async (request) => {
     const classId = Number((request.params as { id: string }).id);
-    assertClass(classId);
+    await assertClass(classId);
     const body = importSchema.parse(request.body ?? {});
     const names = parseNameLines(body.text);
     if (names.length === 0) throw badRequest('No se ha detectado ningún nombre en el texto');
 
-    const next = db
-      .prepare('SELECT COALESCE(MAX(sort_order), 0) AS max FROM students WHERE class_id = ?')
-      .get(classId) as { max: number };
-    let order = next.max;
-    const insert = db.prepare(
-      'INSERT INTO students (class_id, name, sort_order, created_at) VALUES (?, ?, ?, ?)',
-    );
-    db.transaction(() => {
+    const next = await db
+      .prepare('SELECT COALESCE(MAX(sort_order), 0) AS max FROM students WHERE class_id = $1')
+      .get<{ max: number }>(classId);
+    let order = next?.max ?? 0;
+    await db.transaction(async (tx) => {
       for (const name of names) {
         order += 1;
-        insert.run(classId, name, order, nowIso());
+        await tx
+          .prepare(
+            'INSERT INTO students (class_id, name, sort_order, created_at) VALUES ($1, $2, $3, $4)',
+          )
+          .run(classId, name, order, nowIso());
       }
-    })();
+    });
 
-    return { imported: names.length, students: listStudents(classId) };
+    return { imported: names.length, students: await listStudents(classId) };
   });
 
   app.patch('/api/students/:id', async (request) => {
     const studentId = Number((request.params as { id: string }).id);
-    const existing = db.prepare('SELECT * FROM students WHERE id = ?').get(studentId) as
-      | { id: number; class_id: number }
-      | undefined;
+    const existing = await db
+      .prepare('SELECT * FROM students WHERE id = $1')
+      .get<{ id: number; class_id: number }>(studentId);
     if (!existing) throw notFound('Alumno no encontrado');
     const body = studentSchema.parse(request.body ?? {});
-    db.prepare('UPDATE students SET name = ? WHERE id = ?').run(body.name, studentId);
+    await db.prepare('UPDATE students SET name = $1 WHERE id = $2').run(body.name, studentId);
     return { id: studentId, classId: existing.class_id, name: body.name };
   });
 
   app.delete('/api/students/:id', async (request, reply) => {
     const studentId = Number((request.params as { id: string }).id);
-    const existing = db.prepare('SELECT id FROM students WHERE id = ?').get(studentId);
+    const existing = await db.prepare('SELECT id FROM students WHERE id = $1').get(studentId);
     if (!existing) throw notFound('Alumno no encontrado');
-    db.prepare('DELETE FROM students WHERE id = ?').run(studentId);
+    await db.prepare('DELETE FROM students WHERE id = $1').run(studentId);
     reply.code(204).send();
   });
 }

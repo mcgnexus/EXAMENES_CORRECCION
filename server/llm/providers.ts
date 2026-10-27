@@ -156,7 +156,7 @@ const geminiProvider: ProviderDefinition = {
   name: 'Google Gemini',
   requiresKey: true,
   keyVariable: 'GEMINI_API_KEY',
-  defaultModel: 'gemini-2.5-flash',
+  defaultModel: 'gemini-3.8-flash',
   async evaluate(input, ctx) {
     const parts: unknown[] = [{ text: buildUserPrompt(input) }];
     for (const image of input.images) {
@@ -194,7 +194,9 @@ const geminiProvider: ProviderDefinition = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Responde solo: OK' }] }] }),
-        signal: AbortSignal.timeout(30_000),
+        // El free tier de Gemini puede tardar >60 s; margen amplio para no
+        // reportar falsos fallos de conexión.
+        signal: AbortSignal.timeout(120_000),
       },
     );
     if (!response.ok) throw new Error(await readError(response));

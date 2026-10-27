@@ -34,7 +34,7 @@ function providerInfos(): ProviderInfo[] {
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/settings', async () => ({
-    settings: getSettings(),
+    settings: await getSettings(),
     providers: providerInfos(),
     maxBatch: 10,
   }));
@@ -48,7 +48,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         throw badRequest(`Proveedor desconocido: ${config.provider}`);
       }
     }
-    const saved = saveSettings(body);
+    const saved = await saveSettings(body);
     return { settings: saved, providers: providerInfos() };
   });
 
