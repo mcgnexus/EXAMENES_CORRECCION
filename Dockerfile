@@ -15,7 +15,9 @@ ENV NODE_ENV=production \
     DATA_DIR=/app/data
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# --include=dev: la SPA se construye con vite y el servidor arranca con tsx,
+# ambos en devDependencies (NODE_ENV=production los excluiría por defecto).
+RUN npm ci --include=dev
 
 COPY . .
 
