@@ -14,8 +14,63 @@ import type {
 
 const TIMEOUT_MS = 180_000;
 
+// Reintentos: los picos de carga de los proveedores (503/429) suelen ser
+// transitorios ("spikes are usually temporary"), así que reintenta con espera
+// creciente en lugar de fallar la entrega al primer susto.
+const RETRY_ATTEMPTS = 4;
+const RETRY_PER_ATTEMPT_MS = 45_000;
+const RETRY_BACKOFF_MS = [2_000, 4_000, 8_000];
+const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
 function timeoutSignal(): AbortSignal {
   return AbortSignal.timeout(TIMEOUT_MS);
+}
+
+function retryWaitMs(attempt: number): number {
+  const base = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+  return base + Math.floor(Math.random() * 500);
+}
+
+/**
+ * fetch con reintentos ante estados transitorios (503/429/5xx) y errores de
+ * red o de timeout de intento. Cada intento tiene su propio timeout acotado;
+ * la señal del llamador sigue limitando el tiempo total.
+ */
+async function fetchWithRetry(url: string, init: RequestInit = {}): Promise<Response> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(RETRY_PER_ATTEMPT_MS)])
+      : AbortSignal.timeout(RETRY_PER_ATTEMPT_MS);
+    try {
+      const response = await fetch(url, { ...init, signal });
+      if (isRetryableStatus(response.status) && attempt < RETRY_ATTEMPTS) {
+        const wait = retryWaitMs(attempt);
+        console.warn(
+          `[llm] HTTP ${response.status} transitorio, reintento ${attempt}/${RETRY_ATTEMPTS - 1} en ${wait} ms`,
+        );
+        await sleep(wait);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= RETRY_ATTEMPTS || init.signal?.aborted) throw error;
+      const name = error instanceof Error ? error.name : 'desconocido';
+      const wait = retryWaitMs(attempt);
+      console.warn(`[llm] ${name} transitorio, reintento ${attempt}/${RETRY_ATTEMPTS - 1} en ${wait} ms`);
+      await sleep(wait);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Llamada al proveedor agotada');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableStatus(status: number): boolean {
+  return RETRY_STATUS.has(status);
 }
 
 async function readError(response: Response): Promise<string> {
@@ -45,7 +100,7 @@ const openaiProvider: ProviderDefinition = {
         image_url: { url: `data:${image.mime};base64,${image.base64}` },
       });
     }
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ctx.apiKey}`,
@@ -70,7 +125,7 @@ const openaiProvider: ProviderDefinition = {
     return parseGradingResponse(text, input);
   },
   async ping(ctx) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ctx.apiKey}`,
@@ -105,7 +160,7 @@ const anthropicProvider: ProviderDefinition = {
         source: { type: 'base64', media_type: image.mime, data: image.base64 },
       });
     }
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'x-api-key': ctx.apiKey,
@@ -130,7 +185,7 @@ const anthropicProvider: ProviderDefinition = {
     return parseGradingResponse(text, input);
   },
   async ping(ctx) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'x-api-key': ctx.apiKey,
@@ -156,7 +211,7 @@ const geminiProvider: ProviderDefinition = {
   name: 'Google Gemini',
   requiresKey: true,
   keyVariable: 'GEMINI_API_KEY',
-  defaultModel: 'gemini-3.8-flash',
+  defaultModel: 'gemini-3.6-flash',
   async evaluate(input, ctx) {
     const parts: unknown[] = [{ text: buildUserPrompt(input) }];
     for (const image of input.images) {
@@ -164,7 +219,7 @@ const geminiProvider: ProviderDefinition = {
       parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });
     }
     const model = ctx.model || geminiProvider.defaultModel;
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(ctx.apiKey)}`,
       {
         method: 'POST',
@@ -188,7 +243,7 @@ const geminiProvider: ProviderDefinition = {
   },
   async ping(ctx) {
     const model = ctx.model || geminiProvider.defaultModel;
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(ctx.apiKey)}`,
       {
         method: 'POST',

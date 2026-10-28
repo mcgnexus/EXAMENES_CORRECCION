@@ -281,31 +281,33 @@ export async function correctSubmission(submissionId: number): Promise<void> {
   try {
     const input = await buildGradingInput(submissionId, settings);
 
-    try {
-      await runAndPersistEvaluation({
+    // Las 3 evaluaciones son independientes entre sí: se lanzan en paralelo.
+    // La primaria fallida aborta la entrega; los fallos de las independientes
+    // quedan registrados por runAndPersistEvaluation y la comparación sigue.
+    const results = await Promise.allSettled([
+      runAndPersistEvaluation({
         submissionId,
         role: 'primary',
         provider: settings.primary.provider,
         model: settings.primary.model,
         input,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`La propuesta del modelo primario falló: ${message}`);
-    }
-
-    for (const independent of settings.independent) {
-      try {
-        await runAndPersistEvaluation({
+      }),
+      ...settings.independent.map((independent) =>
+        runAndPersistEvaluation({
           submissionId,
           role: 'independent',
           provider: independent.provider,
           model: independent.model,
           input,
-        });
-      } catch {
-        // El fallo queda registrado en la evaluación; la comparación sigue con el resto.
-      }
+        }),
+      ),
+    ]);
+
+    const primaryResult = results[0];
+    if (primaryResult.status === 'rejected') {
+      const reason = primaryResult.reason;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      throw new Error(`La propuesta del modelo primario falló: ${message}`);
     }
 
     const activity = await db
