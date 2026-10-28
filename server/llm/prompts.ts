@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { GradingInput, GradingOutput } from './types';
+import type { ScanResult } from '../../shared/types';
 
 export const SUBJECT_LABEL: Record<string, string> = {
   biologia: 'Biología',
@@ -128,5 +129,94 @@ export function normalizeModelOutput(
     reading: parsed.reading.trim(),
     overallComment: parsed.overallComment.trim(),
     items,
+  };
+}
+
+// ------------------------------------------------------------------ Escáner
+
+export function buildScanSystemPrompt(esperado: 'auto' | 'examen' | 'lista'): string {
+  const focus =
+    esperado === 'lista'
+      ? 'Se espera una LISTA DE ALUMNOS (acta de matrícula, hoja de clase…): extrae los NOMBRES.'
+      : esperado === 'examen'
+        ? 'Se espera un EXAMEN o práctica: extrae el enunciado y los apartados con su puntuación.'
+        : 'Puede ser un examen, una lista de alumnos u otro documento: identifica primero qué es.';
+  return [
+    'Eres un extractor de información de documentos escaneados o fotografiados (OCR con comprensión).',
+    focus,
+    'Lee con cuidado el texto manuscrito e impreso. No inventes contenido: si algo no se ve o no aplica,',
+    'déjalo vacío y explícalo brevemente en "observaciones".',
+    '',
+    'Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional ni bloques de código, con esta forma:',
+    '{"tipo":"examen|lista|otro",',
+    ' "titulo":"<título del examen o documento>",',
+    ' "asignatura":"biologia|bioquimica|otro",',
+    ' "enunciado":"<texto completo del enunciado o preguntas, con saltos de línea>",',
+    ' "apartados":[{"titulo":"<apartado>","descripcion":"<qué valora>","puntos":<número>}],',
+    ' "nombres":["<nombre completo del alumno>", …],',
+    ' "observaciones":"<nota breve>"}',
+    'Reglas: los nombres completos sin numeración ni separadores CSV; los "puntos" con decimal;',
+    'si el documento no es ni examen ni lista, usa tipo "otro" y deja vacíos el resto de campos.',
+  ].join('\n');
+}
+
+export function buildScanUserPrompt(
+  esperado: 'auto' | 'examen' | 'lista',
+  imageCount: number,
+): string {
+  return [
+    imageCount === 1
+      ? 'Adjunto 1 imagen del documento a escanear.'
+      : `Adjunto ${imageCount} imágenes del documento, en orden de lectura.`,
+    'Devuelve únicamente el JSON indicado.',
+    esperado === 'auto' ? '' : 'Recuerda el tipo de documento esperado indicado antes.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export const scanResponseSchema = z.object({
+  tipo: z.enum(['examen', 'lista', 'otro']).default('otro'),
+  titulo: z.string().optional().default(''),
+  asignatura: z.string().optional().default(''),
+  enunciado: z.string().optional().default(''),
+  apartados: z
+    .array(
+      z.object({
+        titulo: z.string().optional().default(''),
+        descripcion: z.string().optional().default(''),
+        puntos: z.number().optional().default(1),
+      }),
+    )
+    .max(20)
+    .default([]),
+  nombres: z.array(z.string()).max(80).default([]),
+  observaciones: z.string().optional().default(''),
+});
+
+export function parseScanResponse(text: string): ScanResult {
+  const parsed = scanResponseSchema.parse(extractJsonObject(text));
+  const apartados = parsed.apartados
+    .map((item, index) => ({
+      title: (item.titulo || `Apartado ${index + 1}`).trim().slice(0, 200),
+      description: item.descripcion.trim().slice(0, 4000),
+      maxPoints: Math.min(1000, Math.max(0.5, Math.round((item.puntos || 1) * 10) / 10)),
+    }))
+    .slice(0, 20);
+  const nombres = Array.from(
+    new Set(
+      parsed.nombres
+        .map((name) => name.replace(/^\s*\d+[).\-\s]+/, '').trim())
+        .filter((name) => name.length > 2 && name.length <= 120),
+    ),
+  );
+  return {
+    tipo: parsed.tipo,
+    titulo: parsed.titulo.trim().slice(0, 200),
+    asignatura: parsed.asignatura.trim().toLowerCase().slice(0, 40),
+    enunciado: parsed.enunciado.trim().slice(0, 12000),
+    apartados,
+    nombres,
+    observaciones: parsed.observaciones.trim().slice(0, 1000),
   };
 }

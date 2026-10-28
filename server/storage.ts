@@ -5,6 +5,7 @@ import fssync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
+import type { ImagePart } from './llm/types';
 import { FILES_DIR, db, nowIso } from './db';
 
 const execFileAsync = promisify(execFile);
@@ -110,6 +111,42 @@ export interface StoredUpload {
   original: { storedPath: string; mime: string; originalName: string; size: number };
   pages: { storedPath: string; mime: string; pageNo: number }[];
   text: string | null;
+}
+
+/**
+ * Convierte una subida (PDF o imagen) en ImageParts para el escáner, sin
+ * persistir nada en disco. Máximo `maxPages` páginas.
+ */
+export async function renderUploadToImages(
+  file: { buffer: Buffer; filename: string; mimetype: string },
+  maxPages = 4,
+): Promise<ImagePart[]> {
+  const parts: ImagePart[] = [];
+  if (isPdf(file.mimetype, file.filename)) {
+    const rendered = await pdfToPngBuffers(
+      file.buffer,
+      `scan-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    );
+    for (let index = 0; index < Math.min(rendered.length, maxPages); index += 1) {
+      const normalized = await normalizeImage(rendered[index]);
+      parts.push({
+        label: `Página ${index + 1}`,
+        mime: normalized.mime.startsWith('image/') ? normalized.mime : 'image/png',
+        base64: normalized.buffer.toString('base64'),
+      });
+    }
+    return parts;
+  }
+  if (isImage(file.mimetype, file.filename)) {
+    const normalized = await normalizeImage(file.buffer);
+    parts.push({
+      label: 'Documento escaneado',
+      mime: normalized.mime.startsWith('image/') ? normalized.mime : 'image/png',
+      base64: normalized.buffer.toString('base64'),
+    });
+    return parts;
+  }
+  throw new Error('El escaneo admite imágenes (JPG/PNG/…) o PDF');
 }
 
 /**

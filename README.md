@@ -21,6 +21,13 @@ ni entrenamiento de modelos.
 8. **Revisión humana**: visor de páginas, edición de puntos/comentarios, aprobación.
 9. **Exportación**: CSV del acta (calificaciones y comentarios) y PDF de corrección por alumno.
 
+## Escáner (autorelleno con visión)
+
+En **Clases y alumnos** y en **Nueva actividad** hay un botón «📷 Escanear»:
+sube una foto o PDF (lista de alumnos o examen) y el modelo primario configurado
+extrae los nombres, o bien el título, la asignatura, el enunciado y los apartados
+con su puntuación, rellenando el formulario para que lo revises antes de guardar.
+
 ## Requisitos
 
 - Node.js 20+ y npm.

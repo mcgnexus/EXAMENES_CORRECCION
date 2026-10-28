@@ -194,6 +194,21 @@ try {
     'se suben los cuatro documentos',
   );
 
+  // 4b. Escáner (con proveedor simulado: solo se valida el recorrido y la estructura)
+  const scanWithFile = await upload(
+    base,
+    '/api/scan',
+    { esperado: 'examen' },
+    [{ name: 'enunciado.pdf', type: 'application/pdf', buffer: enunciado }],
+  );
+  ok(scanWithFile.status === 200, 'el endpoint de escaneo responde con un PDF');
+  ok(
+    typeof (scanWithFile.data as { tipo?: string }).tipo === 'string',
+    'el escaneo devuelve la estructura de resultados',
+  );
+  const scanWithoutFile = await upload(base, '/api/scan', { esperado: 'auto' }, []);
+  ok(scanWithoutFile.status === 400, 'el escaneo sin fichero falla con 400');
+
   const bundle = await json<{
     documents: { kind: string; pageCount: number; text: string | null }[];
   }>(base, 'GET', `/api/activities/${activityId}`);

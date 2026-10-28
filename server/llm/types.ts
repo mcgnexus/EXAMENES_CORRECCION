@@ -1,9 +1,14 @@
-import type { RubricItem, Subject } from '../../shared/types';
+import type { RubricItem, ScanResult, Subject } from '../../shared/types';
 
 export interface ImagePart {
   label: string;
   mime: string;
   base64: string;
+}
+
+export interface ScanInput {
+  esperado: 'auto' | 'examen' | 'lista';
+  images: ImagePart[];
 }
 
 export interface GradingInput {
@@ -45,5 +50,6 @@ export interface ProviderDefinition {
   keyVariable: string | null;
   defaultModel: string;
   evaluate(input: GradingInput, ctx: ProviderCallContext): Promise<GradingOutput>;
+  scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult>;
   ping(ctx: ProviderCallContext): Promise<string>;
 }

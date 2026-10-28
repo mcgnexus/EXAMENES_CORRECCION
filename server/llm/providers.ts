@@ -1,8 +1,11 @@
 import {
+  buildScanSystemPrompt,
+  buildScanUserPrompt,
   buildSystemPrompt,
   buildUserPrompt,
   extractJsonObject,
   normalizeModelOutput,
+  parseScanResponse,
 } from './prompts';
 import type {
   GradingInput,
@@ -10,7 +13,9 @@ import type {
   ProviderCallContext,
   ProviderDefinition,
   ProviderId,
+  ScanInput,
 } from './types';
+import type { ScanResult } from '../../shared/types';
 
 const TIMEOUT_MS = 180_000;
 
@@ -124,6 +129,38 @@ const openaiProvider: ProviderDefinition = {
     const text = data.choices?.[0]?.message?.content ?? '';
     return parseGradingResponse(text, input);
   },
+  async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
+    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${image.mime};base64,${image.base64}` },
+      });
+    }
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || openaiProvider.defaultModel,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: buildScanSystemPrompt(input.esperado) },
+          { role: 'user', content },
+        ],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw new Error(await readError(response));
+    const data = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    return parseScanResponse(data.choices?.[0]?.message?.content ?? '');
+  },
   async ping(ctx) {
     const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -184,6 +221,39 @@ const anthropicProvider: ProviderDefinition = {
       .join('\n');
     return parseGradingResponse(text, input);
   },
+  async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
+    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mime, data: image.base64 },
+      });
+    }
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ctx.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || anthropicProvider.defaultModel,
+        max_tokens: 4000,
+        temperature: 0,
+        system: buildScanSystemPrompt(input.esperado),
+        messages: [{ role: 'user', content }],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw new Error(await readError(response));
+    const data = (await response.json()) as { content?: { type: string; text?: string }[] };
+    const text = (data.content ?? [])
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text ?? '')
+      .join('\n');
+    return parseScanResponse(text);
+  },
   async ping(ctx) {
     const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -240,6 +310,35 @@ const geminiProvider: ProviderDefinition = {
       .map((part) => part.text ?? '')
       .join('\n');
     return parseGradingResponse(text, input);
+  },
+  async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
+    const parts: unknown[] = [{ text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    for (const image of input.images) {
+      parts.push({ text: `— ${image.label} —` });
+      parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });
+    }
+    const model = ctx.model || geminiProvider.defaultModel;
+    const response = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(ctx.apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: buildScanSystemPrompt(input.esperado) }] },
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+        }),
+        signal: ctx.signal ?? timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw new Error(await readError(response));
+    const data = (await response.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (data.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? '')
+      .join('\n');
+    return parseScanResponse(text);
   },
   async ping(ctx) {
     const model = ctx.model || geminiProvider.defaultModel;
@@ -319,6 +418,17 @@ const simuladoProvider: ProviderDefinition = {
       items,
     };
   },
+  async scan() {
+    return {
+      tipo: 'otro' as const,
+      titulo: '',
+      asignatura: '',
+      enunciado: '',
+      apartados: [],
+      nombres: [],
+      observaciones: 'Proveedor simulado: sin capacidad de visión para extraer información.',
+    };
+  },
   async ping() {
     return 'Proveedor simulado disponible';
   },
@@ -358,6 +468,20 @@ export async function runProviderEvaluation(
     throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
   }
   return provider.evaluate(input, { apiKey, model });
+}
+
+export async function runProviderScan(
+  providerId: string,
+  model: string,
+  input: ScanInput,
+): Promise<ScanResult> {
+  const provider = getProvider(providerId);
+  if (!provider) throw new Error(`Proveedor desconocido: ${providerId}`);
+  const { apiKey, missingVariable } = providerKey(providerId);
+  if (missingVariable) {
+    throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
+  }
+  return provider.scan(input, { apiKey, model });
 }
 
 export async function testProvider(providerId: string, model: string): Promise<string> {

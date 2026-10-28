@@ -16,6 +16,7 @@ import { registerSettingsRoutes } from './routes/settings';
 import { registerFileRoutes } from './routes/files';
 import { registerExportRoutes } from './routes/export';
 import { registerEventRoutes } from './routes/events';
+import { registerScanRoutes } from './routes/scan';
 
 export async function buildServer(): Promise<FastifyInstance> {
   await recoverInterruptedWork();
@@ -51,6 +52,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await registerFileRoutes(app);
   await registerExportRoutes(app);
   await registerEventRoutes(app);
+  await registerScanRoutes(app);
 
   app.get('/api/health', async () => ({ ok: true }));
 

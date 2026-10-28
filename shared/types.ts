@@ -181,3 +181,21 @@ export interface ActivityBundle {
   submissions: SubmissionRow[];
   students: StudentRow[];
 }
+
+export type ScanKind = 'examen' | 'lista' | 'otro';
+
+export interface ScanRubricItem {
+  title: string;
+  description: string;
+  maxPoints: number;
+}
+
+export interface ScanResult {
+  tipo: ScanKind;
+  titulo: string;
+  asignatura: string;
+  enunciado: string;
+  apartados: ScanRubricItem[];
+  nombres: string[];
+  observaciones: string;
+}

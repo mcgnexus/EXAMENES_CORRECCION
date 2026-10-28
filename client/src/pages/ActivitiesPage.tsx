@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { ActivityRow, ClassRow, Subject } from '../../../shared/types';
-import { apiGet, apiSend, errorMessage } from '../api';
+import type { ActivityRow, ClassRow, ScanResult, ScanRubricItem, Subject } from '../../../shared/types';
+import { apiGet, apiSend, apiUpload, errorMessage } from '../api';
 
 function subjectLabel(subject: string): string {
   return subject === 'bioquimica' ? 'Bioquímica' : 'Biología';
@@ -15,6 +15,9 @@ export default function ActivitiesPage() {
   const [subject, setSubject] = useState<Subject>('biologia');
   const [classId, setClassId] = useState<string>('');
   const [description, setDescription] = useState('');
+  const [scanBusy, setScanBusy] = useState(false);
+  const [detectedRubric, setDetectedRubric] = useState<ScanRubricItem[] | null>(null);
+  const examScanRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -46,6 +49,15 @@ export default function ActivitiesPage() {
         classId: classId ? Number(classId) : null,
         description,
       });
+      if (detectedRubric && detectedRubric.length > 0) {
+        await apiSend(`/api/activities/${bundle.activity.id}/rubric`, 'PUT', {
+          items: detectedRubric.map((item) => ({
+            title: item.title,
+            description: item.description,
+            maxPoints: item.maxPoints,
+          })),
+        });
+      }
       navigate(`/activities/${bundle.activity.id}`);
     } catch (err) {
       setError(errorMessage(err));
@@ -53,6 +65,39 @@ export default function ActivitiesPage() {
       setBusy(false);
     }
   }
+
+  const scanExam = (file: File) => {
+    setBusy(true);
+    setError('');
+    setScanBusy(true);
+    (async () => {
+      const form = new FormData();
+      form.append('esperado', 'examen');
+      form.append('file', file);
+      const result = await apiUpload<ScanResult>('/api/scan', form);
+      if (
+        result.tipo === 'lista' &&
+        result.nombres.length > 0 &&
+        !result.titulo &&
+        result.apartados.length === 0
+      ) {
+        throw new Error(
+          'Esto parece una lista de alumnos, no un examen. Usa el botón «📷 Escanear lista» en la pantalla de Clases y alumnos.',
+        );
+      }
+      if (result.titulo) setTitle(result.titulo);
+      if (result.asignatura === 'biologia' || result.asignatura === 'bioquimica') {
+        setSubject(result.asignatura);
+      }
+      if (result.enunciado) setDescription(result.enunciado);
+      setDetectedRubric(result.apartados.length > 0 ? result.apartados : null);
+    })()
+      .catch((err) => setError(errorMessage(err)))
+      .finally(() => {
+        setBusy(false);
+        setScanBusy(false);
+      });
+  };
 
   async function remove(activityId: number) {
     if (!confirm('¿Borrar la actividad y todas sus entregas?')) return;
@@ -86,6 +131,38 @@ export default function ActivitiesPage() {
             <h2>Nueva actividad</h2>
           </div>
           <div className="stack">
+            <div className="row">
+              <button
+                className="btn ghost"
+                onClick={() => examScanRef.current?.click()}
+                disabled={busy || scanBusy}
+              >
+                {scanBusy ? '📷 Escaneando… (10-40 s)' : '📷 Escanear examen'}
+              </button>
+              <span className="small muted">
+                Sube una foto o PDF del examen y relleno título, materia, enunciado y apartados
+              </span>
+              <input
+                ref={examScanRef}
+                type="file"
+                accept="image/*,.pdf"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) scanExam(file);
+                }}
+              />
+            </div>
+            {detectedRubric && (
+              <div className="notice" style={{ marginBottom: 0 }}>
+                <strong>
+                  Se crearán {detectedRubric.length} apartados al crear la actividad:
+                </strong>
+                <br />
+                {detectedRubric.map((item) => `${item.title} (${item.maxPoints})`).join(' · ')}
+              </div>
+            )}
             <label className="field">
               Título
               <input

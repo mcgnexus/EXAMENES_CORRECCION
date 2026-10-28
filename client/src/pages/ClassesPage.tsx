@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { ClassRow, StudentRow, Subject } from '../../../shared/types';
-import { apiGet, apiSend, errorMessage } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ClassRow, ScanResult, StudentRow, Subject } from '../../../shared/types';
+import { apiGet, apiSend, apiUpload, errorMessage } from '../api';
 
 export default function ClassesPage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -10,6 +10,8 @@ export default function ClassesPage() {
   const [subject, setSubject] = useState<Subject>('biologia');
   const [studentName, setStudentName] = useState('');
   const [importText, setImportText] = useState('');
+  const [scanBusy, setScanBusy] = useState(false);
+  const listScanRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -84,6 +86,27 @@ export default function ClassesPage() {
       setImportText('');
       await loadStudents(selectedId);
       await loadClasses();
+    });
+
+  const scanStudentList = (file: File) =>
+    run(async () => {
+      if (!selectedId) return;
+      setScanBusy(true);
+      try {
+        const form = new FormData();
+        form.append('esperado', 'lista');
+        form.append('file', file);
+        const result = await apiUpload<ScanResult>('/api/scan', form);
+        const names = result.nombres.filter(Boolean);
+        if (names.length === 0) {
+          throw new Error(
+            `No he detectado nombres legibles en la imagen.${result.observaciones ? ` ${result.observaciones}` : ''}`,
+          );
+        }
+        setImportText(names.join('\n'));
+      } finally {
+        setScanBusy(false);
+      }
     });
 
   const removeStudent = (studentId: number) =>
@@ -210,9 +233,33 @@ export default function ClassesPage() {
                       rows={4}
                     />
                   </label>
-                  <button className="btn" onClick={importStudents} disabled={busy || !importText.trim()}>
-                    Importar alumnos
-                  </button>
+                  <div className="row">
+                    <button className="btn" onClick={importStudents} disabled={busy || !importText.trim()}>
+                      Importar alumnos
+                    </button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => listScanRef.current?.click()}
+                      disabled={busy || scanBusy}
+                    >
+                      {scanBusy ? '📷 Escaneando… (10-40 s)' : '📷 Escanear lista'}
+                    </button>
+                    <input
+                      ref={listScanRef}
+                      type="file"
+                      accept="image/*,.pdf"
+                      hidden
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) void scanStudentList(file);
+                      }}
+                    />
+                  </div>
+                  <p className="small muted">
+                    Sube una foto o escaneo de la lista de alumnos y el sistema leerá los nombres
+                    automáticamente; revisa el resultado antes de importar.
+                  </p>
                 </div>
               </div>
 
