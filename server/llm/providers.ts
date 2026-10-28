@@ -1,6 +1,8 @@
 import {
   buildScanSystemPrompt,
   buildScanUserPrompt,
+  buildSolveSystemPrompt,
+  buildSolveUserPrompt,
   buildSystemPrompt,
   buildUserPrompt,
   extractJsonObject,
@@ -14,6 +16,8 @@ import type {
   ProviderDefinition,
   ProviderId,
   ScanInput,
+  SolveInput,
+  SolveOutput,
 } from './types';
 import type { ScanResult } from '../../shared/types';
 
@@ -182,6 +186,39 @@ const openaiProvider: ProviderDefinition = {
     };
     return parseScanResponse(data.choices?.[0]?.message?.content ?? '');
   },
+  async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
+    const content: unknown[] = [
+      { type: 'text', text: buildSolveUserPrompt(input.enunciado, input.apartados, input.images.length) },
+    ];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${image.mime};base64,${image.base64}` },
+      });
+    }
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || openaiProvider.defaultModel,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: buildSolveSystemPrompt(input.subject) },
+          { role: 'user', content },
+        ],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    return { respuestas: data.choices?.[0]?.message?.content ?? '' };
+  },
   async ping(ctx) {
     const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -275,6 +312,41 @@ const anthropicProvider: ProviderDefinition = {
       .join('\n');
     return parseScanResponse(text);
   },
+  async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
+    const content: unknown[] = [
+      { type: 'text', text: buildSolveUserPrompt(input.enunciado, input.apartados, input.images.length) },
+    ];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mime, data: image.base64 },
+      });
+    }
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ctx.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || anthropicProvider.defaultModel,
+        max_tokens: 8000,
+        temperature: 0.2,
+        system: buildSolveSystemPrompt(input.subject),
+        messages: [{ role: 'user', content }],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as { content?: { type: string; text?: string }[] };
+    const text = (data.content ?? [])
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text ?? '')
+      .join('\n');
+    return { respuestas: text };
+  },
   async ping(ctx) {
     const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -360,6 +432,37 @@ const geminiProvider: ProviderDefinition = {
       .map((part) => part.text ?? '')
       .join('\n');
     return parseScanResponse(text);
+  },
+  async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
+    const parts: unknown[] = [
+      { text: buildSolveUserPrompt(input.enunciado, input.apartados, input.images.length) },
+    ];
+    for (const image of input.images) {
+      parts.push({ text: `— ${image.label} —` });
+      parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });
+    }
+    const model = ctx.model || geminiProvider.defaultModel;
+    const response = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(ctx.apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: buildSolveSystemPrompt(input.subject) }] },
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0.2 },
+        }),
+        signal: ctx.signal ?? timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (data.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? '')
+      .join('\n');
+    return { respuestas: text };
   },
   async ping(ctx) {
     const model = ctx.model || geminiProvider.defaultModel;
@@ -450,6 +553,26 @@ const simuladoProvider: ProviderDefinition = {
       observaciones: 'Proveedor simulado: sin capacidad de visión para extraer información.',
     };
   },
+  async solve(input: SolveInput): Promise<SolveOutput> {
+    const enunciado =
+      input.enunciado.trim() ||
+      `(${input.images.length} página(s) de enunciado adjuntas)`;
+    return {
+      respuestas: [
+        `Solución simulada (offline) para «${input.subject}»:`,
+        '',
+        ...input.apartados.map(
+          (apartado) =>
+            `## ${apartado.title} (${apartado.maxPoints} puntos)\nRespuesta de referencia completa de «${apartado.title}», con definiciones, desarrollo y razonamiento esperado.`,
+        ),
+        input.apartados.length === 0 ? `## Enunciado\n${enunciado}` : '',
+        '',
+        'Vigilar al corregir: respuestas incompletas, confusión de conceptos y ausencia de justificación.',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    };
+  },
   async ping() {
     return 'Proveedor simulado disponible';
   },
@@ -503,6 +626,65 @@ export async function runProviderScan(
     throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
   }
   return provider.scan(input, { apiKey, model });
+}
+
+export async function runProviderSolve(
+  providerId: string,
+  model: string,
+  input: SolveInput,
+): Promise<SolveOutput> {
+  const provider = getProvider(providerId);
+  if (!provider) throw new Error(`Proveedor desconocido: ${providerId}`);
+  const { apiKey, missingVariable } = providerKey(providerId);
+  if (missingVariable) {
+    throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
+  }
+  return provider.solve(input, { apiKey, model });
+}
+
+export interface ModelConfig {
+  provider: string;
+  model: string;
+}
+
+/** Cadena primario → alternativos, sin duplicados. */
+export function buildFailoverChain(
+  primary: ModelConfig,
+  alternatives: ModelConfig[],
+): ModelConfig[] {
+  const seen = new Set<string>();
+  return [primary, ...alternatives].filter((config) => {
+    const key = `${config.provider}:${config.model}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Ejecuta `run` con el modelo primario; si falla de forma transitoria
+ * (503/429/…), prueba con los alternativos en orden. Los errores no
+ * transitorios cortan al instante.
+ */
+export async function runWithModelFailover<T>(
+  primary: ModelConfig,
+  alternatives: ModelConfig[],
+  run: (provider: string, model: string) => Promise<T>,
+): Promise<T> {
+  const chain = buildFailoverChain(primary, alternatives);
+  let lastError: unknown = null;
+  for (const config of chain) {
+    try {
+      return await run(config.provider, config.model);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientProviderError(error)) break;
+      console.warn(
+        `[llm] ${config.provider}/${config.model} no disponible (transitorio); probando el siguiente modelo…`,
+      );
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Ningún modelo está disponible');
 }
 
 export async function testProvider(providerId: string, model: string): Promise<string> {

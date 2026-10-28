@@ -1,14 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { db, nowIso } from '../db';
+import { db, getSettings, nowIso } from '../db';
 import { badRequest, notFound } from '../errors';
 import {
   getActivityBundle,
+  getActivityRow,
   listActivities,
   listDocuments,
   listRubric,
 } from '../mappers';
-import { insertFile, removeOwnerFiles, storeUpload } from '../storage';
+import { runProviderSolve, runWithModelFailover } from '../llm/providers';
+import type { ImagePart } from '../llm/types';
+import { insertFile, readFileBase64, removeOwnerFiles, storeUpload } from '../storage';
 import { collectMultipart } from '../multipart';
 
 const activitySchema = z.object({
@@ -212,6 +215,87 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
 
     reply.code(201);
     return (await listDocuments(activityId)).find((document) => document.id === documentId);
+  });
+
+  // Genera la plantilla de respuestas con IA cuando no existe solución de referencia.
+  app.post('/api/activities/:id/generate-solution', async (request) => {
+    const activityId = Number((request.params as { id: string }).id);
+    const activity = await getActivityRow(activityId);
+    if (!activity) throw notFound('Actividad no encontrada');
+
+    const documents = await listDocuments(activityId);
+    const enunciados = documents.filter((doc) => doc.kind === 'enunciado');
+    if (enunciados.length === 0) {
+      throw badRequest('Sube primero el enunciado (PDF o foto) para poder generar la plantilla');
+    }
+
+    const MAX_ENUNCIADO_PAGES = 6;
+    const images: ImagePart[] = [];
+    let enunciadoText = '';
+    for (const doc of enunciados) {
+      if (doc.text) enunciadoText += `${doc.text}\n\n`;
+      if (images.length >= MAX_ENUNCIADO_PAGES) continue;
+      const pages = await db
+        .prepare(
+          "SELECT stored_path, mime FROM files WHERE owner_type = 'document' AND owner_id = $1 AND kind = 'page' ORDER BY page_no ASC, id ASC",
+        )
+        .all<{ stored_path: string; mime: string }>(doc.id);
+      for (let index = 0; index < pages.length; index += 1) {
+        if (images.length >= MAX_ENUNCIADO_PAGES) break;
+        const page = pages[index];
+        if (!page.mime.startsWith('image/')) continue;
+        images.push({
+          label: `Enunciado · ${doc.name} · página ${index + 1}`,
+          mime: page.mime,
+          base64: await readFileBase64(page.stored_path),
+        });
+      }
+    }
+    if (!enunciadoText.trim() && images.length === 0) {
+      throw badRequest('El enunciado no tiene texto ni páginas legibles desde las que generar la plantilla');
+    }
+
+    const rubric = await listRubric(activityId);
+    const settings = await getSettings();
+
+    let respuestas: string;
+    try {
+      const solved = await runWithModelFailover(
+        settings.primary,
+        settings.independent,
+        (provider, model) =>
+          runProviderSolve(provider, model, {
+            subject: activity.subject,
+            enunciado: enunciadoText,
+            images,
+            apartados: rubric.map((item) => ({ title: item.title, maxPoints: item.maxPoints })),
+          }),
+      );
+      respuestas = solved.respuestas.trim();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw badRequest(`La generación de la plantilla ha fallado: ${message}. Reinténtalo en unos segundos.`);
+    }
+    if (!respuestas) throw badRequest('El modelo no ha devuelto respuestas. Reinténtalo en unos segundos.');
+
+    // Upsert: si ya existe una solución generada por IA, se actualiza su texto
+    // en lugar de crear un documento duplicado.
+    const GENERATED_SOLUTION_NAME = 'Solución generada por IA';
+    const existing = documents.find(
+      (doc) => doc.kind === 'solucion' && doc.name === GENERATED_SOLUTION_NAME,
+    );
+    if (existing) {
+      await db
+        .prepare('UPDATE activity_documents SET text = $1 WHERE id = $2')
+        .run(respuestas, existing.id);
+    } else {
+      await db
+        .prepare(
+          "INSERT INTO activity_documents (activity_id, kind, name, text, created_at) VALUES ($1, 'solucion', $2, $3, $4)",
+        )
+        .run(activityId, GENERATED_SOLUTION_NAME, respuestas, nowIso());
+    }
+    return listDocuments(activityId);
   });
 
   app.delete('/api/documents/:id', async (request, reply) => {

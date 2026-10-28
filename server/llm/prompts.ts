@@ -132,6 +132,56 @@ export function normalizeModelOutput(
   };
 }
 
+// --------------------------------------- Generar plantilla de respuestas (IA)
+
+export function buildSolveSystemPrompt(subject: string): string {
+  return [
+    `Eres un profesor experto y meticuloso de ${SUBJECT_LABEL[subject] ?? subject}.`,
+    'Vas a responder un examen completo tal y como lo respondería un alumno perfecto:',
+    'esa respuesta será la plantilla (solución de referencia) con la que se corregirán',
+    'los exámenes de los alumnos.',
+    '',
+    'Reglas:',
+    '- Responde CADA apartado del examen, en el mismo orden, con un encabezado por',
+    '  apartado (## Apartado N · título).',
+    '- Desarrollo completo y riguroso: definiciones, procesos, fórmulas, ejemplos y',
+    '  esquemas en texto, con el razonamiento esperado en una respuesta perfecta.',
+    '- En exámenes prácticos, muestra el procedimiento paso a paso y el resultado final.',
+    '- Añade al final, bajo "Vigilar al corregir", los errores típicos que conviene',
+    '  comprobar en las respuestas de los alumnos.',
+    '- Escribe en español, en Markdown, sin bloques de código salvo las fórmulas.',
+  ].join('\n');
+}
+
+export function buildSolveUserPrompt(
+  enunciado: string,
+  apartados: { title: string; maxPoints: number }[],
+  imageCount: number,
+): string {
+  const parts: string[] = [];
+  if (apartados.length > 0) {
+    parts.push(
+      'Apartados del examen (de la rúbrica):',
+      JSON.stringify(apartados, null, 2),
+      '',
+    );
+  }
+  if (enunciado.trim()) {
+    parts.push('Enunciado (texto):', enunciado.trim().slice(0, 12000), '');
+  }
+  if (imageCount > 0) {
+    parts.push(
+      imageCount === 1
+        ? 'Adjunto 1 imagen del examen: léela completa antes de responder.'
+        : `Adjunto ${imageCount} imágenes del examen, en orden de lectura: léelas completas antes de responder.`,
+    );
+  } else {
+    parts.push('No se adjuntan imágenes; responde solo con el texto del enunciado.');
+  }
+  parts.push('', 'Responde el examen completo como plantilla de corrección.');
+  return parts.join('\n');
+}
+
 // ------------------------------------------------------------------ Escáner
 
 export function buildScanSystemPrompt(esperado: 'auto' | 'examen' | 'lista'): string {

@@ -11,6 +11,17 @@ export interface ScanInput {
   images: ImagePart[];
 }
 
+export interface SolveInput {
+  subject: Subject;
+  enunciado: string;
+  images: ImagePart[];
+  apartados: { title: string; maxPoints: number }[];
+}
+
+export interface SolveOutput {
+  respuestas: string;
+}
+
 export interface GradingInput {
   subject: Subject;
   activityTitle: string;
@@ -51,5 +62,6 @@ export interface ProviderDefinition {
   defaultModel: string;
   evaluate(input: GradingInput, ctx: ProviderCallContext): Promise<GradingOutput>;
   scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult>;
+  solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput>;
   ping(ctx: ProviderCallContext): Promise<string>;
 }

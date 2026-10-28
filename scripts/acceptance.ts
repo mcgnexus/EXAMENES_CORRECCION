@@ -194,6 +194,19 @@ try {
     'se suben los cuatro documentos',
   );
 
+  const bundle = await json<{
+    documents: { kind: string; pageCount: number; text: string | null }[];
+  }>(base, 'GET', `/api/activities/${activityId}`);
+  ok(bundle.data.documents.length === 4, 'la actividad guarda 4 documentos');
+  ok(
+    bundle.data.documents.filter((doc) => doc.kind !== 'documentacion').every((doc) => doc.pageCount >= 1),
+    'los PDF se convierten en páginas',
+  );
+  ok(
+    bundle.data.documents.some((doc) => doc.kind === 'documentacion' && (doc.text ?? '').includes('Criterios')),
+    'el documento de texto conserva su contenido',
+  );
+
   // 4b. Escáner (con proveedor simulado: solo se valida el recorrido y la estructura)
   const scanWithFile = await upload(
     base,
@@ -208,18 +221,29 @@ try {
   );
   const scanWithoutFile = await upload(base, '/api/scan', { esperado: 'auto' }, []);
   ok(scanWithoutFile.status === 400, 'el escaneo sin fichero falla con 400');
-
-  const bundle = await json<{
-    documents: { kind: string; pageCount: number; text: string | null }[];
-  }>(base, 'GET', `/api/activities/${activityId}`);
-  ok(bundle.data.documents.length === 4, 'la actividad guarda 4 documentos');
-  ok(
-    bundle.data.documents.filter((doc) => doc.kind !== 'documentacion').every((doc) => doc.pageCount >= 1),
-    'los PDF se convierten en páginas',
+  // 4c. Plantilla de respuestas generada por IA (proveedor simulado)
+  const generated = await json<
+    { id: number; kind: string; name: string; text: string | null }[]
+  >(base, 'POST', `/api/activities/${activityId}/generate-solution`);
+  ok(generated.status === 200, 'la generación de plantilla responde');
+  const solucionGenerada = generated.data.find(
+    (doc) => doc.kind === 'solucion' && doc.name === 'Solución generada por IA',
   );
   ok(
-    bundle.data.documents.some((doc) => doc.kind === 'documentacion' && (doc.text ?? '').includes('Criterios')),
-    'el documento de texto conserva su contenido',
+    Boolean(solucionGenerada && (solucionGenerada.text ?? '').length > 0),
+    'la plantilla generada queda guardada como documento de solución con texto',
+  );
+  const regenerated = await json<{ id: number; kind: string; name: string }[]>(
+    base,
+    'POST',
+    `/api/activities/${activityId}/generate-solution`,
+  );
+  ok(regenerated.status === 200, 'regenerar la plantilla responde');
+  ok(
+    regenerated.data.filter(
+      (doc) => doc.kind === 'solucion' && doc.name === 'Solución generada por IA',
+    ).length === 1,
+    'regenerar la plantilla no la duplica (upsert)',
   );
 
   // 5. Entregas de dos alumnos (PDF con dos páginas)

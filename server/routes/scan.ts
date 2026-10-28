@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getSettings } from '../db';
 import { badRequest } from '../errors';
-import { isTransientProviderError, runProviderScan } from '../llm/providers';
+import { runProviderScan, runWithModelFailover } from '../llm/providers';
 import { renderUploadToImages } from '../storage';
 import { collectMultipart } from '../multipart';
 
@@ -26,29 +26,15 @@ export async function registerScanRoutes(app: FastifyInstance): Promise<void> {
 
     const settings = await getSettings();
     // Failover: primario → alternativos, solo ante errores transitorios.
-    const seen = new Set<string>();
-    const chain = [settings.primary, ...settings.independent].filter((config) => {
-      const key = `${config.provider}:${config.model}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    let lastError: unknown = null;
-    for (const config of chain) {
-      try {
-        return await runProviderScan(config.provider, config.model, {
-          esperado: esperado.data,
-          images,
-        });
-      } catch (error) {
-        lastError = error;
-        if (!isTransientProviderError(error)) break;
-        console.warn(
-          `[llm] escáner con ${config.provider}/${config.model} no disponible (transitorio); probando el siguiente modelo…`,
-        );
-      }
+    try {
+      return await runWithModelFailover(
+        settings.primary,
+        settings.independent,
+        (provider, model) => runProviderScan(provider, model, { esperado: esperado.data, images }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw badRequest(`El escaneo ha fallado: ${message}. Reinténtalo en unos segundos.`);
     }
-    const message = lastError instanceof Error ? lastError.message : String(lastError);
-    throw badRequest(`El escaneo ha fallado: ${message}. Reinténtalo en unos segundos.`);
   });
 }

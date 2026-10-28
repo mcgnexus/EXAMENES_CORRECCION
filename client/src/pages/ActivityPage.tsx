@@ -73,6 +73,7 @@ export default function ActivityPage() {
 
   const [docKind, setDocKind] = useState<DocumentKind>('enunciado');
   const [docName, setDocName] = useState('');
+  const [solveBusy, setSolveBusy] = useState(false);
   const docInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [uploadTarget, setUploadTarget] = useState<StudentRow | null>(null);
@@ -214,6 +215,24 @@ export default function ActivityPage() {
     }, 'Documento subido');
     input.value = '';
   }
+
+  const generateSolution = () =>
+    run(async () => {
+      const hasSolucion = bundle?.documents.some((document) => document.kind === 'solucion');
+      if (
+        hasSolucion &&
+        !confirm('Ya existe un documento de solución. ¿Generar otra vez la plantilla con IA?')
+      ) {
+        return;
+      }
+      setSolveBusy(true);
+      try {
+        await apiSend(`/api/activities/${activityId}/generate-solution`, 'POST');
+        await refresh();
+      } finally {
+        setSolveBusy(false);
+      }
+    }, 'Plantilla de respuestas generada por IA');
 
   const saveRubric = () =>
     run(async () => {
@@ -385,6 +404,15 @@ export default function ActivityPage() {
         <div className="card-head">
           <h2>Enunciado, solución y documentación</h2>
           <span className="badge">{bundle.documents.length}</span>
+        </div>
+
+        <div className="row" style={{ marginBottom: 10, alignItems: 'center' }}>
+          <button className="btn" disabled={busy || solveBusy} onClick={generateSolution}>
+            {solveBusy ? '🤖 Generando plantilla… (10-60 s)' : '🤖 Generar plantilla de respuestas (IA)'}
+          </button>
+          <span className="small muted">
+            La IA responde el enunciado y guarda el resultado como documento «Solución» para corregir con referencia.
+          </span>
         </div>
 
         <div className="doc-list" style={{ marginBottom: 14 }}>
