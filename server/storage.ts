@@ -1,12 +1,17 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
-import fssync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import type { ImagePart } from './llm/types';
 import { FILES_DIR, db, nowIso } from './db';
+import {
+  readStoredFile,
+  removeStoredFile as removeStored,
+  storedFileExists,
+  writeStoredFile,
+} from './fileStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,18 +19,12 @@ const MAX_IMAGE_SIDE = 2000;
 const PDF_DPI = 150;
 const MAX_PDF_PAGES = 40;
 
-export function absPath(storedPath: string): string {
-  return path.join(FILES_DIR, storedPath);
-}
-
 export function fileUrl(fileId: number): string {
   return `/api/files/${fileId}`;
 }
 
-async function writeBuffer(relPath: string, buffer: Buffer): Promise<void> {
-  const target = absPath(relPath);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, buffer);
+async function writeBuffer(relPath: string, buffer: Buffer, mime: string): Promise<void> {
+  await writeStoredFile(relPath, buffer, mime);
 }
 
 function randomName(ext: string): string {
@@ -85,6 +84,16 @@ async function pdfToPngBuffers(buffer: Buffer, tmpPrefix: string): Promise<Buffe
       pdfPath,
       outPrefix,
     ]);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === 'ENOENT') {
+      throw new Error(
+        'La conversión de PDF no está disponible en este entorno. Sube las páginas como imágenes JPG o PNG.',
+      );
+    }
+    throw error;
+  }
+  try {
     const files = (await fs.readdir(tmpDir))
       .filter((name) => name.startsWith(`${tmpPrefix}-page`) && name.endsWith('.png'))
       .sort((a, b) => {
@@ -166,7 +175,7 @@ export async function storeUpload(
 
   if (isPdf(file.mimetype, file.filename)) {
     const pdfRel = path.join(relDir, randomName('pdf'));
-    await writeBuffer(pdfRel, file.buffer);
+    await writeBuffer(pdfRel, file.buffer, 'application/pdf');
     const rendered = await pdfToPngBuffers(
       file.buffer,
       `${ownerType}-${ownerId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
@@ -174,7 +183,7 @@ export async function storeUpload(
     for (let i = 0; i < rendered.length; i += 1) {
       const normalized = await normalizeImage(rendered[i]);
       const pageRel = path.join(relDir, randomName('png'));
-      await writeBuffer(pageRel, normalized.buffer);
+      await writeBuffer(pageRel, normalized.buffer, 'image/png');
       pages.push({ storedPath: pageRel, mime: 'image/png', pageNo: i + 1 });
     }
     return {
@@ -187,7 +196,7 @@ export async function storeUpload(
   if (isImage(file.mimetype, file.filename)) {
     const normalized = await normalizeImage(file.buffer);
     const imgRel = path.join(relDir, randomName('png'));
-    await writeBuffer(imgRel, normalized.buffer);
+    await writeBuffer(imgRel, normalized.buffer, normalized.mime);
     pages.push({ storedPath: imgRel, mime: 'image/png', pageNo: 1 });
     return {
       original: {
@@ -201,7 +210,7 @@ export async function storeUpload(
     };
   }
 
-  await writeBuffer(originalRel, file.buffer);
+  await writeBuffer(originalRel, file.buffer, file.mimetype);
   if (isTextDocument(file.filename)) {
     text = file.buffer.toString('utf8');
   }
@@ -240,20 +249,16 @@ export async function insertFile(input: {
 }
 
 export async function readFileBase64(relPath: string): Promise<string> {
-  const buffer = await fs.readFile(absPath(relPath));
+  const buffer = await readStoredFile(relPath);
   return buffer.toString('base64');
 }
 
-export function fileExists(storedPath: string): boolean {
-  return fssync.existsSync(absPath(storedPath));
+export async function fileExists(storedPath: string): Promise<boolean> {
+  return storedFileExists(storedPath);
 }
 
 export async function removeStoredFile(storedPath: string): Promise<void> {
-  try {
-    await fs.rm(absPath(storedPath), { force: true });
-  } catch {
-    /* ignore */
-  }
+  await removeStored(storedPath);
 }
 
 export async function removeOwnerFiles(ownerType: string, ownerId: number): Promise<void> {

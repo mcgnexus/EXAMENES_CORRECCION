@@ -1,9 +1,8 @@
-import fs from 'node:fs/promises';
 import PDFDocument from 'pdfkit';
 import type { RubricItem } from '../../shared/types';
 import { db } from '../db';
 import { listRubric } from '../mappers';
-import { absPath } from '../storage';
+import { readStoredFile } from '../fileStore';
 
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Borrador (sin aprobar)',
@@ -174,7 +173,7 @@ export async function buildSubmissionReportPdf(
     doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827');
     doc.text(`${data.studentName} · página ${index + 1}`, left, 40);
     try {
-      const buffer = await fs.readFile(absPath(data.pages[index].storedPath));
+      const buffer = await readStoredFile(data.pages[index].storedPath);
       doc.image(buffer, left, 70, {
         fit: [contentWidth, 720],
         align: 'center',
