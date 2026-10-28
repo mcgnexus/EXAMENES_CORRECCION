@@ -277,9 +277,12 @@ textarea:focus {
   border: 0;
   border-radius: 7px;
   background: transparent;
-  font-size: 16px;
-  line-height: 1;
+  color: var(--muted);
   cursor: pointer;
+}
+
+.password-toggle svg {
+  display: block;
 }
 
 .password-toggle:hover,

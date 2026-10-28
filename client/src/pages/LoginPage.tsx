@@ -75,7 +75,29 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
               title={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
               onClick={() => setVisible((current) => !current)}
             >
-              {visible ? '🙈' : '👁'}
+              {visible ? (
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    d="M3 3l18 18M10.6 10.7a2 2 0 002.8 2.8M9.9 5.1A10.5 10.5 0 0121 12a11.8 11.8 0 01-3 3.4M6.2 6.3A11.6 11.6 0 003 12a10.5 10.5 0 0011.1 6.9"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    d="M3 12s3.5-6.5 9-6.5S21 12 21 12s-3.5 6.5-9 6.5S3 12 3 12z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+              )}
             </button>
           </span>
         </label>
