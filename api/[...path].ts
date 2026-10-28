@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { buildServer } from '../server/index';
+import { buildServer } from '../server/index.ts';
 
 let appPromise: ReturnType<typeof buildServer> | undefined;
 

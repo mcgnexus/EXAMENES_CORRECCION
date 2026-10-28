@@ -15,5 +15,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["server", "shared", "client/src", "scripts", "vite.config.ts"]
+  "include": ["api", "server", "shared", "client/src", "scripts", "vite.config.ts"]
 }
