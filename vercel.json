@@ -1,8 +1,11 @@
 {
   "buildCommand": "npm run build:vercel",
   "outputDirectory": "dist/client",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index?__path=:path*" }
+  ],
   "functions": {
-    "api/[...path].ts": {
+    "api/index.ts": {
       "maxDuration": 60
     }
   }
