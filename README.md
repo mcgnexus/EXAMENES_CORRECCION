@@ -90,19 +90,27 @@ llamada mínima.
 - `npm run acceptance` usa un esquema PostgreSQL dedicado (`PG_SCHEMA`) que se elimina solo
   al terminar: no deja datos en tu base real.
 
-## Despliegue en Railway
+## Despliegue en Vercel
 
-La app corre en contenedor (Dockerfile en la raíz, con poppler para PDFs):
+La app se despliega como frontend estático + una función serverless que empaqueta
+el servidor Fastify (`api/index.ts`). Los archivos se guardan en **Vercel Blob
+privado**; en local, en `data/files/`.
 
-- **URL:** https://examenes-correccion-production.up.railway.app
-- **Autenticación:** Basic Auth obligatorio (`AUTH_USER` / `AUTH_PASSWORD` en las
-  variables de entorno de Railway; `/api/health` queda exento para healthchecks)
-- **Persistencia:** volumen montado en `/app/data` (archivos) + PostgreSQL remoto
-  (`DATABASE_URL`) — los datos sobreviven a redespliegues
-- **Variables necesarias en Railway:** `DATABASE_URL`, `GEMINI_API_KEY`,
-  `AUTH_USER`, `AUTH_PASSWORD`
-- **Redespliegue:** `npx @railway/cli up -d -y --service <service-id>` o desde el
-  dashboard; `scripts/_deploy-smoke.ts` verifica el recorrido completo remoto
+- **Configuración:** `vercel.json` (build `npm run build:vercel`, salida `dist/client`).
+- **Almacenamiento:** almacén Blob con acceso **privado**, conectado al proyecto.
+  Vercel aporta `BLOB_READ_WRITE_TOKEN`; sin ese token se usa el disco local.
+- **Variables necesarias:** `DATABASE_URL`, `AUTH_USER`, `AUTH_PASSWORD`,
+  `GEMINI_API_KEY` y las credenciales de Blob que conecta Vercel.
+- **Límites:** las funciones admiten cuerpos de hasta ~4,5 MB; para PDFs o fotos
+  mayores hace falta subida directa al Blob desde el navegador. La conversión de
+  PDF con Poppler no está disponible en Vercel: sube las páginas como imágenes.
+- **Despliegue:** `npx vercel deploy --prod`.
+
+## Despliegue alternativo en Railway
+
+También se puede ejecutar en contenedor (Dockerfile en la raíz, con poppler para
+PDFs), con volumen montado en `/app/data` y PostgreSQL remoto.
+
 
 ## Verificación
 

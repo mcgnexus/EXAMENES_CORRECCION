@@ -6,3 +6,5 @@ data/
 .DS_Store
 .vercel
 api/_server.js
+.env.local
+.env.*.local
