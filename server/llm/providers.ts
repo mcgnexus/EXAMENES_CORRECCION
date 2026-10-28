@@ -1,4 +1,6 @@
 import {
+  buildReadSystemPrompt,
+  buildReadUserPrompt,
   buildScanSystemPrompt,
   buildScanUserPrompt,
   buildSolveSystemPrompt,
@@ -15,6 +17,8 @@ import type {
   ProviderCallContext,
   ProviderDefinition,
   ProviderId,
+  ReadInput,
+  ReadOutput,
   ScanInput,
   SolveInput,
   SolveOutput,
@@ -138,7 +142,7 @@ const openaiProvider: ProviderDefinition = {
       },
       body: JSON.stringify({
         model: ctx.model || openaiProvider.defaultModel,
-        temperature: 0.2,
+        temperature: 0,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: buildSystemPrompt(input) },
@@ -185,6 +189,37 @@ const openaiProvider: ProviderDefinition = {
       choices?: { message?: { content?: string } }[];
     };
     return parseScanResponse(data.choices?.[0]?.message?.content ?? '');
+  },
+  async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
+    const content: unknown[] = [{ type: 'text', text: buildReadUserPrompt(input.images.length) }];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${image.mime};base64,${image.base64}` },
+      });
+    }
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || openaiProvider.defaultModel,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: buildReadSystemPrompt(input.subject) },
+          { role: 'user', content },
+        ],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    return { text: data.choices?.[0]?.message?.content ?? '' };
   },
   async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
     const content: unknown[] = [
@@ -265,7 +300,7 @@ const anthropicProvider: ProviderDefinition = {
       body: JSON.stringify({
         model: ctx.model || anthropicProvider.defaultModel,
         max_tokens: 3000,
-        temperature: 0.2,
+        temperature: 0,
         system: buildSystemPrompt(input),
         messages: [{ role: 'user', content }],
       }),
@@ -311,6 +346,39 @@ const anthropicProvider: ProviderDefinition = {
       .map((block) => block.text ?? '')
       .join('\n');
     return parseScanResponse(text);
+  },
+  async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
+    const content: unknown[] = [{ type: 'text', text: buildReadUserPrompt(input.images.length) }];
+    for (const image of input.images) {
+      content.push({ type: 'text', text: `— ${image.label} —` });
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mime, data: image.base64 },
+      });
+    }
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ctx.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ctx.model || anthropicProvider.defaultModel,
+        max_tokens: 4000,
+        temperature: 0,
+        system: buildReadSystemPrompt(input.subject),
+        messages: [{ role: 'user', content }],
+      }),
+      signal: ctx.signal ?? timeoutSignal(),
+    });
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as { content?: { type: string; text?: string }[] };
+    const text = (data.content ?? [])
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text ?? '')
+      .join('\n');
+    return { text };
   },
   async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
     const content: unknown[] = [
@@ -390,7 +458,7 @@ const geminiProvider: ProviderDefinition = {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: buildSystemPrompt(input) }] },
           contents: [{ role: 'user', parts }],
-          generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+          generationConfig: { temperature: 0, responseMimeType: 'application/json' },
         }),
         signal: ctx.signal ?? timeoutSignal(),
       },
@@ -432,6 +500,35 @@ const geminiProvider: ProviderDefinition = {
       .map((part) => part.text ?? '')
       .join('\n');
     return parseScanResponse(text);
+  },
+  async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
+    const parts: unknown[] = [{ text: buildReadUserPrompt(input.images.length) }];
+    for (const image of input.images) {
+      parts.push({ text: `— ${image.label} —` });
+      parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });
+    }
+    const model = ctx.model || geminiProvider.defaultModel;
+    const response = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(ctx.apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: buildReadSystemPrompt(input.subject) }] },
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0 },
+        }),
+        signal: ctx.signal ?? timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw await readError(response);
+    const data = (await response.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (data.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? '')
+      .join('\n');
+    return { text };
   },
   async solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput> {
     const parts: unknown[] = [
@@ -553,6 +650,11 @@ const simuladoProvider: ProviderDefinition = {
       observaciones: 'Proveedor simulado: sin capacidad de visión para extraer información.',
     };
   },
+  async read(): Promise<ReadOutput> {
+    return {
+      text: 'Proveedor simulado: no hay visión disponible, así que no puede verificar la lectura del examen.',
+    };
+  },
   async solve(input: SolveInput): Promise<SolveOutput> {
     const enunciado =
       input.enunciado.trim() ||
@@ -626,6 +728,20 @@ export async function runProviderScan(
     throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
   }
   return provider.scan(input, { apiKey, model });
+}
+
+export async function runProviderRead(
+  providerId: string,
+  model: string,
+  input: ReadInput,
+): Promise<ReadOutput> {
+  const provider = getProvider(providerId);
+  if (!provider) throw new Error(`Proveedor desconocido: ${providerId}`);
+  const { apiKey, missingVariable } = providerKey(providerId);
+  if (missingVariable) {
+    throw new Error(`Falta la variable de entorno ${missingVariable} para usar ${provider.name}`);
+  }
+  return provider.read(input, { apiKey, model });
 }
 
 export async function runProviderSolve(

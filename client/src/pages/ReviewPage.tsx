@@ -13,6 +13,14 @@ interface FormState {
   overall: string;
 }
 
+interface ReadingCheck {
+  text: string;
+  pages: number;
+  totalPages: number;
+  provider: string;
+  model: string;
+}
+
 const EVAL_STATUS: Record<string, string> = {
   pending: 'Pendiente',
   running: 'Evaluando',
@@ -39,6 +47,8 @@ export default function ReviewPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [readingBusy, setReadingBusy] = useState(false);
+  const [readingCheck, setReadingCheck] = useState<ReadingCheck | null>(null);
 
   const load = async () => {
     const data = await apiGet<SubmissionDetail>(`/api/submissions/${submissionId}`);
@@ -86,6 +96,24 @@ export default function ReviewPage() {
       setError(errorMessage(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function checkReading() {
+    if (readingBusy) return;
+    setReadingBusy(true);
+    setError('');
+    try {
+      const result = await apiSend<ReadingCheck>(
+        `/api/submissions/${submissionId}/reading-check`,
+        'POST',
+      );
+      setReadingCheck(result);
+      setNotice('Lectura del modelo completada. Compárala con las páginas del examen.');
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setReadingBusy(false);
     }
   }
 
@@ -149,6 +177,9 @@ export default function ReviewPage() {
           <span className="badge" style={{ fontSize: 13, padding: '6px 12px' }}>
             {total.toFixed(1)} / {maxTotal.toFixed(1)}
           </span>
+          <button className="btn" onClick={() => void checkReading()} disabled={busy || readingBusy}>
+            {readingBusy ? 'Comprobando lectura…' : 'Comprobar lectura IA'}
+          </button>
           <a className="btn" href={`/api/submissions/${submissionId}/report.pdf`} target="_blank" rel="noreferrer">
             Descargar PDF
           </a>
@@ -170,6 +201,22 @@ export default function ReviewPage() {
           Esta entrega aún no tiene evaluaciones. Lánzala desde{' '}
           <Link to={`/activities/${detail.activity.id}`}>la actividad</Link>.
         </div>
+      )}
+
+      {readingCheck && (
+        <details className="reading" open style={{ marginBottom: 16 }}>
+          <summary>
+            Lectura del examen por IA · {readingCheck.provider} ({readingCheck.model}) ·{' '}
+            {readingCheck.pages} de {readingCheck.totalPages} páginas
+          </summary>
+          <pre>{readingCheck.text}</pre>
+          {readingCheck.pages < readingCheck.totalPages && (
+            <p className="small" style={{ marginTop: 8, color: '#b45309' }}>
+              Solo se enviaron {readingCheck.pages} de {readingCheck.totalPages} páginas. Aumenta
+              «Máx. páginas por documento» en Ajustes si faltan preguntas.
+            </p>
+          )}
+        </details>
       )}
 
       <div className="grid review">

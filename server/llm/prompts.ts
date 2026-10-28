@@ -23,14 +23,17 @@ export function buildSystemPrompt(input: GradingInput): string {
     '- Antes de puntuar, recorre visualmente TODAS las páginas adjuntas de la entrega y localiza cada pregunta de la rúbrica.',
     '- Para CADA apartado distingue explícitamente: RESPONDIDO, EN BLANCO (la pregunta se ve y no hay respuesta) o NO LOCALIZABLE (no puedes encontrar la pregunta en las páginas recibidas).',
     '- EN BLANCO recibe 0 puntos y el comentario debe comenzar por "EN BLANCO". No confundas una hoja/página en blanco con una pregunta no localizada.',
+    '- NO LOCALIZABLE recibe 0 puntos provisionales; no lo presentes como respuesta correcta.',
+    '- Solo puedes dar más de 0 puntos si el estado es RESPONDIDO y puedes citar la evidencia visible de la respuesta.',
     '- Si un apartado no aparece en las páginas de la entrega, no afirmes que está en blanco: indícalo como "NO LOCALIZABLE" y puntúa 0 provisionalmente.',
     '- No omitas ningún apartado aunque esté en blanco, no localizado o ilegible; aporta una línea por apartado en reading.',
     '',
     'Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional ni bloques de código, con esta forma:',
     '{"reading":"<transcripción estructurada: por cada apartado, estado RESPONDIDO/EN BLANCO/NO LOCALIZABLE y evidencia visible>",',
-    ' "items":[{"itemId":<id numérico de la rúbrica>,"points":<número>,"comment":"<comentario>","confidence":<0..1>}],',
+    ' "items":[{"itemId":<id numérico de la rúbrica>,"points":<número>,"state":"RESPONDIDO|EN BLANCO|NO LOCALIZABLE","evidence":"<cita textual o descripción exacta de lo visible>","comment":"<comentario>","confidence":<0..1>}],',
     ' "overallComment":"<comentario global breve del examen>"}',
-    'Incluye exactamente un objeto items por cada apartado de la rúbrica, usando sus ids; incluye el estado en cada comentario.',
+    'Incluye exactamente un objeto items por cada apartado de la rúbrica, usando sus ids.',
+    'El campo "evidence" debe citar lo que se ve (texto manuscrito, operación, tabla…) o indicar que no hay respuesta visible.',
   ].join('\n');
 }
 
@@ -78,6 +81,8 @@ export const modelResponseSchema = z.object({
       z.object({
         itemId: z.number(),
         points: z.number(),
+        state: z.enum(['RESPONDIDO', 'EN BLANCO', 'NO LOCALIZABLE']).optional(),
+        evidence: z.string().optional().default(''),
         comment: z.string().optional().default(''),
         confidence: z.number().nullable().optional().default(null),
       }),
@@ -119,10 +124,16 @@ export function normalizeModelOutput(
       };
     }
     const points = Math.min(rubricItem.maxPoints, Math.max(0, Math.round(found.points * 10) / 10));
+    const blank = found.state === 'EN BLANCO' || found.state === 'NO LOCALIZABLE';
+    const commentParts = [
+      found.state ? `[${found.state}]` : '',
+      (found.comment ?? '').trim(),
+      found.evidence?.trim() ? `Evidencia: ${found.evidence.trim()}` : '',
+    ].filter(Boolean);
     return {
       itemId: rubricItem.id,
-      points,
-      comment: (found.comment ?? '').trim(),
+      points: blank ? 0 : points,
+      comment: commentParts.join(' '),
       confidence:
         typeof found.confidence === 'number'
           ? Math.min(1, Math.max(0, found.confidence))
@@ -135,6 +146,38 @@ export function normalizeModelOutput(
     overallComment: parsed.overallComment.trim(),
     items,
   };
+}
+
+// ------------------------------------------------ Verificar lectura del examen
+
+export function buildReadSystemPrompt(subject: string): string {
+  return [
+    `Eres un transcriptor literal de exámenes manuscritos de ${SUBJECT_LABEL[subject] ?? subject}.`,
+    'Tu única tarea es describir con exactitud lo que se ve en las imágenes de la entrega del alumno.',
+    'No corrijas, no completes respuestas y no deduzcas lo que el alumno "debería" haber escrito.',
+    '',
+    'Reglas:',
+    '- Recorre cada página completa, incluidos márgenes, recuadros, tachones y zonas vacías.',
+    '- Distingue entre pregunta impresa, respuesta manuscrita, marcas (X, círculos, subrayados) y espacios en blanco.',
+    '- Usa [ILEGIBLE] cuando no puedas leer algo y [PÁGINA EN BLANCO] cuando no haya contenido.',
+    '- Para cada página indica las preguntas visibles, la respuesta visible y su estado: RESPONDIDA, EN BLANCO o NO SE VE.',
+    '- Al final incluye un resumen con el número de páginas y las preguntas que no hayas podido localizar.',
+    'Responde en español y en texto plano, sin inventar contenido.',
+  ].join('\n');
+}
+
+export function buildReadUserPrompt(imageCount: number): string {
+  return [
+    imageCount === 1
+      ? 'Adjunto 1 página de la entrega del alumno.'
+      : `Adjunto ${imageCount} páginas de la entrega del alumno, en orden.`,
+    'Transcribe página por página lo que ves, con este formato:',
+    'Página N:',
+    '- Preguntas visibles: …',
+    '- Respuesta del alumno: …',
+    '- Estado: RESPONDIDA / EN BLANCO / NO SE VE',
+    'Al final: "Resumen de lectura: …".',
+  ].join('\n');
 }
 
 // --------------------------------------- Generar plantilla de respuestas (IA)

@@ -13,6 +13,15 @@ export interface ScanInput {
   contexto?: string;
 }
 
+export interface ReadInput {
+  subject: Subject;
+  images: ImagePart[];
+}
+
+export interface ReadOutput {
+  text: string;
+}
+
 export interface SolveInput {
   subject: Subject;
   enunciado: string;
@@ -64,6 +73,7 @@ export interface ProviderDefinition {
   defaultModel: string;
   evaluate(input: GradingInput, ctx: ProviderCallContext): Promise<GradingOutput>;
   scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult>;
+  read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput>;
   solve(input: SolveInput, ctx: ProviderCallContext): Promise<SolveOutput>;
   ping(ctx: ProviderCallContext): Promise<string>;
 }

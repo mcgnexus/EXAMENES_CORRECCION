@@ -5,7 +5,9 @@ import { badRequest, conflict, notFound } from '../errors';
 import { emitEvent } from '../events';
 import { getSubmissionDetail, getSubmissionRow, listSubmissions } from '../mappers';
 import { collectMultipart } from '../multipart';
-import { insertFile, removeOwnerFiles, storeUpload } from '../storage';
+import { insertFile, readFileBase64, removeOwnerFiles, storeUpload } from '../storage';
+import { runProviderRead, runWithModelFailover } from '../llm/providers';
+import type { ImagePart } from '../llm/types';
 import { round1 } from '../pipeline/aggregate';
 
 const gradeSchema = z.object({
@@ -283,6 +285,60 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
     const row = await getSubmissionRow(submissionId);
     if (!row) throw notFound('Entrega no encontrada');
     return row;
+  });
+
+  // Transcripción de control: permite comprobar qué ve realmente el modelo.
+  app.post('/api/submissions/:id/reading-check', async (request) => {
+    const submissionId = Number((request.params as { id: string }).id);
+    const submission = await assertSubmission(submissionId);
+    const activity = await db
+      .prepare('SELECT subject FROM activities WHERE id = $1')
+      .get<{ subject: string }>(submission.activity_id);
+    if (!activity) throw notFound('Actividad no encontrada');
+
+    const pages = await db
+      .prepare(
+        "SELECT stored_path, mime, page_no FROM files WHERE owner_type = 'submission' AND owner_id = $1 AND kind = 'page' ORDER BY page_no ASC, id ASC",
+      )
+      .all<{ stored_path: string; mime: string; page_no: number | null }>(submissionId);
+    if (pages.length === 0) throw badRequest('La entrega no tiene páginas que comprobar');
+
+    const settings = await getSettings();
+    const limit = Math.max(1, settings.maxPagesPerEvaluation);
+    const selected = pages.slice(0, limit);
+    const images: ImagePart[] = [];
+    for (let index = 0; index < selected.length; index += 1) {
+      const page = selected[index];
+      if (!page.mime.startsWith('image/')) continue;
+      try {
+        images.push({
+          label: `Entrega · página ${page.page_no ?? index + 1}`,
+          mime: page.mime,
+          base64: await readFileBase64(page.stored_path),
+        });
+      } catch {
+        /* página no disponible: se avisa por el recuento */
+      }
+    }
+    if (images.length === 0) throw badRequest('No se han podido leer las páginas de la entrega');
+
+    const result = await runWithModelFailover(
+      settings.primary,
+      settings.independent,
+      (provider, model) =>
+        runProviderRead(provider, model, {
+          subject: activity.subject as 'biologia' | 'bioquimica',
+          images,
+        }),
+    );
+
+    return {
+      text: result.text.trim(),
+      pages: images.length,
+      totalPages: pages.length,
+      provider: settings.primary.provider,
+      model: settings.primary.model,
+    };
   });
 
   app.get('/api/config', async () => ({ settings: await getSettings() }));

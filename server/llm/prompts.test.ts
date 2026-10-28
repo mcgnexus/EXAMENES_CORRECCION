@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildReadSystemPrompt,
+  buildReadUserPrompt,
   buildScanUserPrompt,
   buildSolveSystemPrompt,
   buildSystemPrompt,
@@ -43,10 +45,43 @@ describe('instrucciones de evaluación por apartado', () => {
     });
   });
 
+  it('fuerza 0 puntos cuando el apartado está en blanco y guarda la evidencia', () => {
+    const result = normalizeModelOutput(
+      {
+        reading: '',
+        overallComment: '',
+        items: [
+          {
+            itemId: 1,
+            points: 1.5,
+            state: 'EN BLANCO',
+            evidence: 'La pregunta 1 no tiene respuesta manuscrita.',
+            comment: 'Sin respuesta.',
+          },
+        ],
+      },
+      gradingInput,
+    );
+    expect(result.items[0].points).toBe(0);
+    expect(result.items[0].comment).toContain('[EN BLANCO]');
+    expect(result.items[0].comment).toContain('Evidencia: La pregunta 1');
+  });
+
   it('pide una solución de referencia completa y señala ambigüedades', () => {
     const prompt = buildSolveSystemPrompt('biologia');
     expect(prompt).toContain('no omitas apartados');
     expect(prompt).toContain('no lo inventes');
+  });
+});
+
+describe('verificación de lectura', () => {
+  it('pide transcripción literal sin corregir ni inventar', () => {
+    const system = buildReadSystemPrompt('biologia');
+    expect(system).toContain('No corrijas');
+    expect(system).toContain('[PÁGINA EN BLANCO]');
+    const user = buildReadUserPrompt(2);
+    expect(user).toContain('Página N');
+    expect(user).toContain('Estado: RESPONDIDA');
   });
 });
 
