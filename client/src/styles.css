@@ -229,6 +229,7 @@ p {
 .field select,
 .field textarea,
 input[type='text'],
+input[type='password'],
 select,
 textarea {
   font: inherit;
@@ -253,6 +254,102 @@ select:focus,
 textarea:focus {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(67, 56, 202, 0.12);
+}
+
+.password-field {
+  position: relative;
+  display: block;
+}
+
+.password-field input {
+  padding-right: 42px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.password-toggle:hover,
+.password-toggle:focus-visible {
+  background: var(--brand-soft);
+  outline: none;
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(99, 102, 241, 0.18), transparent 42%),
+    radial-gradient(circle at 85% 85%, rgba(168, 85, 247, 0.14), transparent 45%),
+    var(--bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 30px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.login-brand strong {
+  display: block;
+  font-size: 15px;
+}
+
+.login-brand small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.login-submit {
+  width: 100%;
+  padding: 10px 14px;
+}
+
+.login-note {
+  text-align: center;
+}
+
+.sidebar-user {
+  color: #cbd5e1;
+}
+
+.sidebar-logout {
+  color: #c7d2fe;
+  align-self: flex-start;
+  padding-left: 0;
+}
+
+.sidebar-logout:hover:not(:disabled) {
+  color: #fff;
+  background: transparent;
 }
 
 .btn {

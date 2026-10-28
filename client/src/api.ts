@@ -48,6 +48,24 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   return (await response.json()) as T;
 }
 
+export interface AuthStatus {
+  required: boolean;
+  authenticated: boolean;
+  user: string | null;
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return apiGet<AuthStatus>('/api/auth/status');
+}
+
+export async function login(username: string, password: string): Promise<void> {
+  await apiSend('/api/auth/login', 'POST', { username, password });
+}
+
+export async function logout(): Promise<void> {
+  await apiSend('/api/auth/logout', 'POST');
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     return error.details.length ? `${error.message}: ${error.details.join('; ')}` : error.message;
