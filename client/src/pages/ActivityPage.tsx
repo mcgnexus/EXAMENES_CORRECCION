@@ -15,6 +15,7 @@ import type {
 } from '../../../shared/types';
 import { apiGet, apiSend, apiUpload, errorMessage, fileUrl } from '../api';
 import { expandPdfFiles } from '../pdf';
+import OmrSettings from '../OmrSettings';
 
 interface RubricDraft {
   id?: number;
@@ -397,6 +398,7 @@ export default function ActivityPage() {
         </div>
       </div>
 
+      <details style={{marginBottom:16}}><summary>Configurar plantilla, clave y puntuación de test</summary><OmrSettings activityId={activity.id} documents={bundle.documents}/></details>
       <section className="card">
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Datos de la actividad</summary>

@@ -17,6 +17,7 @@ import { registerFileRoutes } from './routes/files';
 import { registerExportRoutes } from './routes/export';
 import { registerEventRoutes } from './routes/events';
 import { registerScanRoutes } from './routes/scan';
+import { registerOmrRoutes } from './routes/omr';
 
 export async function buildServer(options: { serverless?: boolean } = {}): Promise<FastifyInstance> {
   if (!options.serverless) await recoverInterruptedWork();
@@ -53,6 +54,7 @@ export async function buildServer(options: { serverless?: boolean } = {}): Promi
   await registerExportRoutes(app);
   await registerEventRoutes(app);
   await registerScanRoutes(app);
+  await registerOmrRoutes(app);
 
   app.get('/api/health', async () => ({ ok: true }));
 

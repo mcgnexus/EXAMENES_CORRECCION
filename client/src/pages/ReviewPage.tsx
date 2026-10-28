@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { EvaluationRow, SubmissionDetail } from '../../../shared/types';
 import { apiGet, apiSend, errorMessage, fileUrl } from '../api';
+import { questionCount,type OmrConfig } from '../../../shared/omr';
 
 interface ItemForm {
   points: number;
@@ -20,6 +21,8 @@ interface ReadingCheck {
   provider: string;
   model: string;
 }
+
+interface BubbleResult { question: number; answer: string | null; confidence: number; state: 'marked' | 'blank' | 'ambiguous' }
 
 const EVAL_STATUS: Record<string, string> = {
   pending: 'Pendiente',
@@ -49,6 +52,12 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState(false);
   const [readingBusy, setReadingBusy] = useState(false);
   const [readingCheck, setReadingCheck] = useState<ReadingCheck | null>(null);
+  const [bubbleBusy, setBubbleBusy] = useState(false);
+  const [bubbleAnswers, setBubbleAnswers] = useState<BubbleResult[] | null>(null);
+  const [answerKey, setAnswerKey] = useState<Record<number, string>>({});
+  const [omrConfig,setOmrConfig]=useState<OmrConfig|null>(null);
+  const [bubblesConfirmed, setBubblesConfirmed] = useState(false);
+  const [bubbleGrade, setBubbleGrade] = useState<{correct:number;wrong:number;blank:number;total:number;raw:number;scale:number}|null>(null);
 
   const load = async () => {
     const data = await apiGet<SubmissionDetail>(`/api/submissions/${submissionId}`);
@@ -62,6 +71,11 @@ export default function ReviewPage() {
     setZoom(1);
     setPage(0);
     setError('');
+    setBubblesConfirmed(false);
+    setBubbleGrade(null);
+    setBubbleAnswers(null);
+    setAnswerKey({});
+    setOmrConfig(null);
     void load().catch((err) => setError(errorMessage(err)));
   }, [submissionId]);
 
@@ -115,6 +129,30 @@ export default function ReviewPage() {
     } finally {
       setReadingBusy(false);
     }
+  }
+
+  async function detectBubbles() {
+    setBubbleBusy(true);
+    setError('');
+    try {
+      const result = await apiSend<{answers: BubbleResult[];config:OmrConfig}>(`/api/submissions/${submissionId}/detect-bubbles`, 'POST');
+      setBubbleAnswers(result.answers);
+      setOmrConfig(result.config);
+      setAnswerKey(result.config.key);
+      setBubblesConfirmed(false);
+      setBubbleGrade(null);
+      setNotice('Detección lista. Revisa y corrige cada fila antes de calificar.');
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setBubbleBusy(false); }
+  }
+
+  async function calculateBubbleGrade() {
+    if (!bubbleAnswers || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')) return;
+    const result = await apiSend<{correct:number; wrong:number; blank:number; total:number;raw:number;scale:number}>(
+      `/api/submissions/${submissionId}/grade-bubbles`, 'POST',
+      { answers: bubbleAnswers.map(x => ({question:x.question, answer:x.answer})), config:omrConfig, confirmed:true },
+    );
+    setBubbleGrade(result);
   }
 
   const total = useMemo(() => {
@@ -191,6 +229,29 @@ export default function ReviewPage() {
           {error}
         </div>
       )}
+      <section className="card" style={{marginBottom:16}}>
+        <div className="card-head"><h2>Corrección de test · {omrConfig?.template.name??'plantilla de la actividad'} (primera página)</h2>
+          <button className="btn" disabled={bubbleBusy} onClick={() => void detectBubbles()}>{bubbleBusy ? 'Detectando…' : 'Detectar burbujas'}</button>
+        </div>
+        <p className="small muted">Hojas con cuatro cuadrados de referencia y bloques regulares. La detección es una propuesta: revisa todas las respuestas en la imagen antes de calcular. <Link to={`/activities/${detail.activity.id}`}>Configurar plantilla, clave y puntuación en la actividad</Link>.</p>
+        {bubbleAnswers && <>
+          <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Detectada (editable)</th><th>Clave correcta</th></tr></thead><tbody>
+            {bubbleAnswers.map(row => <tr key={row.question}>
+              <td>{row.question}{row.state==='ambiguous' ? ' · REVISAR' : ''}</td>
+              <td><select aria-label={`Respuesta pregunta ${row.question}`} value={row.state==='ambiguous' ? '?' : row.answer ?? ''} onChange={e => {
+                setBubblesConfirmed(false);setBubbleGrade(null);
+                setBubbleAnswers(prev => prev?.map(x => x.question===row.question ? {...x,answer:e.target.value||null,state:e.target.value?'marked':'blank'} : x)??null);
+              }}>{row.state==='ambiguous'&&<option value="?">Dudosa: selecciona una opción</option>}<option value="">En blanco</option>{[...(omrConfig?.template.options??'ABCD')].map(v=><option key={v}>{v}</option>)}</select></td>
+              <td>{answerKey[row.question]??'Sin clave confirmada'}</td>
+            </tr>)}
+          </tbody></table></div>
+          {!omrConfig?.keyConfirmed&&<p className="notice">Confirma y guarda la clave en la actividad antes de calcular.</p>}
+          <label style={{display:'block',marginTop:12}}><input type="checkbox" checked={bubblesConfirmed} onChange={e=>{setBubblesConfirmed(e.target.checked);setBubbleGrade(null);}} /> He cotejado las {omrConfig?questionCount(omrConfig.template):bubbleAnswers.length} respuestas y la clave con los documentos originales.</label>
+          <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Previsualizar puntuación configurada</button>
+          {omrConfig&&<p className="small muted">Acierto {omrConfig.scoring.correct}; error {omrConfig.scoring.wrong}; blanco {omrConfig.scoring.blank}; escala {omrConfig.scoring.scale}.</p>}
+          {bubbleGrade && <p role="status">{bubbleGrade.correct} aciertos · {bubbleGrade.wrong} errores · {bubbleGrade.blank} en blanco · Bruto: {bubbleGrade.raw.toFixed(2)} · Nota: {bubbleGrade.total.toFixed(2)} / {bubbleGrade.scale}. Solo previsualización; no se ha guardado una nota.</p>}
+        </>}
+      </section>
       {detail.submission.error && (
         <div className="notice" style={{ marginBottom: 14 }}>
           Último error de corrección: {detail.submission.error}

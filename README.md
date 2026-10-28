@@ -10,6 +10,18 @@ ni entrenamiento de modelos.
 
 ## Recorrido cubierto
 
+### Hojas de respuestas tipo test
+
+En la actividad, abre **Configurar plantilla, clave y puntuación de test**:
+
+1. Define las opciones y los bloques regulares de filas (hasta 200 preguntas). Se requieren cuatro cuadrados negros de referencia, visibles en cada foto, que enmarquen todas las burbujas. No es un detector de diseños arbitrarios.
+2. Carga una foto local de ejemplo y pulsa **Calibrar bloque**. Selecciona los centros de las referencias superior izquierda, superior derecha, inferior izquierda e inferior derecha; después la primera y última opción de la primera fila y la primera opción de la última fila del bloque. Repite por bloque. Los puntos verdes deben quedar dentro de todas las burbujas. La foto de calibración no se sube; se guardan las coordenadas relativas.
+3. Configura puntos por acierto, penalización por error y blanco, escala final y si se limita la nota mínima a cero. El cálculo es `bruto / (número de preguntas × puntos por acierto) × escala`, con redondeo final a dos decimales.
+4. Selecciona un documento de tipo **solución** ya cargado y extrae una propuesta de clave con IA. Solo se piden respuestas explícitas: las ausentes/ambiguas quedan pendientes. La extracción guarda primero el borrador de configuración con la clave sin confirmar, pero no guarda la propuesta extraída automáticamente. Coteja todas las opciones y la versión del examen, confirma y guarda.
+5. En una entrega, **Detectar burbujas** analiza únicamente la primera página usando la plantilla de la actividad. Corrige todas las filas dudosas y confirma la revisión. **Previsualizar puntuación configurada** usa la clave confirmada guardada; no usa un LLM y no modifica notas, aprobaciones ni exportaciones.
+
+La configuración se conserva en PostgreSQL mediante la migración `002_omr_config`. Cambiar la configuración después de detectar obliga a repetir la detección/revisión antes del cálculo. Se han probado la foto UAX de ejemplo, su reducción, una marca múltiple y una plantilla sintética de cinco opciones; otras fotos/plantillas requieren validación docente. El flujo de corrección general con LLM es independiente: no debe sustituir este cotejo de burbujas.
+
 1. **Clase** con ~30 alumnos (alta manual o importación de lista/CSV).
 2. **Actividad** de Biología o Bioquímica con **rúbrica por apartados** y documentos:
    enunciado, solución, rúbrica y documentación.

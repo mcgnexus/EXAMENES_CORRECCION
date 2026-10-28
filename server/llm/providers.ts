@@ -191,7 +191,7 @@ const openaiProvider: ProviderDefinition = {
     return parseScanResponse(data.choices?.[0]?.message?.content ?? '');
   },
   async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
-    const content: unknown[] = [{ type: 'text', text: buildReadUserPrompt(input.images.length) }];
+    const content: unknown[] = [{ type: 'text', text: input.context ?? buildReadUserPrompt(input.images.length) }];
     for (const image of input.images) {
       content.push({ type: 'text', text: `— ${image.label} —` });
       content.push({
@@ -209,7 +209,7 @@ const openaiProvider: ProviderDefinition = {
         model: ctx.model || openaiProvider.defaultModel,
         temperature: 0,
         messages: [
-          { role: 'system', content: buildReadSystemPrompt(input.subject) },
+          { role: 'system', content: input.instructions ?? buildReadSystemPrompt(input.subject) },
           { role: 'user', content },
         ],
       }),
@@ -348,7 +348,7 @@ const anthropicProvider: ProviderDefinition = {
     return parseScanResponse(text);
   },
   async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
-    const content: unknown[] = [{ type: 'text', text: buildReadUserPrompt(input.images.length) }];
+    const content: unknown[] = [{ type: 'text', text: input.context ?? buildReadUserPrompt(input.images.length) }];
     for (const image of input.images) {
       content.push({ type: 'text', text: `— ${image.label} —` });
       content.push({
@@ -367,7 +367,7 @@ const anthropicProvider: ProviderDefinition = {
         model: ctx.model || anthropicProvider.defaultModel,
         max_tokens: 4000,
         temperature: 0,
-        system: buildReadSystemPrompt(input.subject),
+        system: input.instructions ?? buildReadSystemPrompt(input.subject),
         messages: [{ role: 'user', content }],
       }),
       signal: ctx.signal ?? timeoutSignal(),
@@ -502,7 +502,7 @@ const geminiProvider: ProviderDefinition = {
     return parseScanResponse(text);
   },
   async read(input: ReadInput, ctx: ProviderCallContext): Promise<ReadOutput> {
-    const parts: unknown[] = [{ text: buildReadUserPrompt(input.images.length) }];
+    const parts: unknown[] = [{ text: input.context ?? buildReadUserPrompt(input.images.length) }];
     for (const image of input.images) {
       parts.push({ text: `— ${image.label} —` });
       parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });
@@ -514,7 +514,7 @@ const geminiProvider: ProviderDefinition = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: buildReadSystemPrompt(input.subject) }] },
+          systemInstruction: { parts: [{ text: input.instructions ?? buildReadSystemPrompt(input.subject) }] },
           contents: [{ role: 'user', parts }],
           generationConfig: { temperature: 0 },
         }),

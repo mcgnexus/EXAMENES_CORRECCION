@@ -9,6 +9,9 @@ import { insertFile, readFileBase64, removeOwnerFiles, storeUpload } from '../st
 import { runProviderRead, runWithModelFailover } from '../llm/providers';
 import type { ImagePart } from '../llm/types';
 import { round1 } from '../pipeline/aggregate';
+import { detectAnswerSheet } from '../omr';
+import { getOmrConfig } from './omr';
+import { scoreAnswers,configSchema } from '../../shared/omr';
 
 const gradeSchema = z.object({
   items: z.array(
@@ -44,6 +47,27 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
     const detail = await getSubmissionDetail(submissionId);
     if (!detail) throw notFound('Entrega no encontrada');
     return detail;
+  });
+
+  app.post('/api/submissions/:id/detect-bubbles', async (request) => {
+    const submissionId = Number((request.params as { id: string }).id);
+    const submission = await assertSubmission(submissionId);
+    const row = await db.prepare("SELECT stored_path FROM files WHERE owner_type='submission' AND owner_id=$1 AND kind='page' ORDER BY page_no ASC LIMIT 1").get<{stored_path:string}>(submissionId);
+    if (!row) throw badRequest('No hay página de imagen que analizar');
+    const base64 = await readFileBase64(row.stored_path);
+    const config = await getOmrConfig(submission.activity_id);
+    const answers = await detectAnswerSheet(Buffer.from(base64, 'base64'),config.template);
+    return { answers, config, warning: 'Confirma visualmente las marcas antes de aplicar la nota.' };
+  });
+
+  app.post('/api/submissions/:id/grade-bubbles', async (request) => {
+    const submissionId = Number((request.params as {id:string}).id);
+    const submission = await assertSubmission(submissionId);
+    const body = z.object({answers:z.array(z.object({question:z.number().int().min(1).max(200), answer:z.string().regex(/^[A-H]$/).nullable()})).min(1).max(200), confirmed:z.literal(true),config:z.unknown()}).parse(request.body);
+    const config=await getOmrConfig(submission.activity_id);
+    if(JSON.stringify(configSchema.parse(body.config))!==JSON.stringify(config)) throw conflict('La configuración ha cambiado: repite la detección y revisión.');
+    // Preview only: never change submission status or claim that this is a saved grade.
+    try{return scoreAnswers(body.answers,config);}catch(error){throw badRequest(error instanceof Error?error.message:'Respuestas inválidas');}
   });
 
   app.get('/api/submissions', async (request) => {

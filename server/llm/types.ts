@@ -16,6 +16,9 @@ export interface ScanInput {
 export interface ReadInput {
   subject: Subject;
   images: ImagePart[];
+  /** Server-owned task instructions for structured answer-key extraction. */
+  instructions?: string;
+  context?: string;
 }
 
 export interface ReadOutput {

@@ -185,6 +185,11 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {id:'002_omr_config',sql:`CREATE TABLE IF NOT EXISTS activity_omr_config (
+    activity_id BIGINT PRIMARY KEY REFERENCES activities(id) ON DELETE CASCADE,
+    config JSONB NOT NULL,
+    updated_at TEXT NOT NULL
+  );`},
 ];
 
 type Runner = (sql: string, params: unknown[]) => Promise<QueryResult>;

@@ -8,3 +8,4 @@ data/
 api/_server.js
 .env.local
 .env.*.local
+public/Examen ejemplo.jpeg
