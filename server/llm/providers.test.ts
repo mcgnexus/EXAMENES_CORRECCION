@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runProviderEvaluation } from './providers';
+import { isTransientProviderError, ProviderHttpError, runProviderEvaluation } from './providers';
 import type { GradingInput } from './types';
 
 function input(seed: number): GradingInput {
@@ -40,5 +40,26 @@ describe('proveedor simulado', () => {
       }
       expect(output.reading.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('clasificación de errores de proveedor', () => {
+  it('los 503/429/5xx y los timeouts son transitorios', () => {
+    expect(isTransientProviderError(new ProviderHttpError(503, 'alta demanda'))).toBe(true);
+    expect(isTransientProviderError(new ProviderHttpError(429, 'límite de tasa'))).toBe(true);
+    expect(isTransientProviderError(new ProviderHttpError(500, 'error interno'))).toBe(true);
+    const timeout = new Error('La operación expiró');
+    timeout.name = 'TimeoutError';
+    expect(isTransientProviderError(timeout)).toBe(true);
+    const abort = new Error('abortada');
+    abort.name = 'AbortError';
+    expect(isTransientProviderError(abort)).toBe(true);
+  });
+
+  it('los errores de cliente y otros no son transitorios', () => {
+    expect(isTransientProviderError(new ProviderHttpError(400, 'petición inválida'))).toBe(false);
+    expect(isTransientProviderError(new ProviderHttpError(401, 'clave inválida'))).toBe(false);
+    expect(isTransientProviderError(new ProviderHttpError(404, 'modelo inexistente'))).toBe(false);
+    expect(isTransientProviderError(new Error('error cualquiera'))).toBe(false);
   });
 });

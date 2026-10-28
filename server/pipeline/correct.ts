@@ -1,7 +1,7 @@
 import type { AppSettings, RubricItem, Subject } from '../../shared/types';
 import { db, getSettings, nowIso } from '../db';
 import { emitEvent } from '../events';
-import { runProviderEvaluation } from '../llm/providers';
+import { isTransientProviderError, runProviderEvaluation } from '../llm/providers';
 import type { GradingInput, ImagePart } from '../llm/types';
 import { listRubric } from '../mappers';
 import { proposeGrade, round1, type EvaluationLike, type ScoreLike } from './aggregate';
@@ -282,26 +282,52 @@ export async function correctSubmission(submissionId: number): Promise<void> {
     const input = await buildGradingInput(submissionId, settings);
 
     // Las 3 evaluaciones son independientes entre sí: se lanzan en paralelo.
-    // La primaria fallida aborta la entrega; los fallos de las independientes
-    // quedan registrados por runAndPersistEvaluation y la comparación sigue.
-    const results = await Promise.allSettled([
+    // La primaria tiene failover: si el modelo configurado falla de forma
+    // transitoria (503/429/…), prueba con los alternativos en orden. Los
+    // fallos de las independientes quedan registrados por
+    // runAndPersistEvaluation y la comparación sigue con las que terminen.
+    const independentPromises = settings.independent.map((independent) =>
       runAndPersistEvaluation({
         submissionId,
-        role: 'primary',
-        provider: settings.primary.provider,
-        model: settings.primary.model,
+        role: 'independent',
+        provider: independent.provider,
+        model: independent.model,
         input,
       }),
-      ...settings.independent.map((independent) =>
-        runAndPersistEvaluation({
-          submissionId,
-          role: 'independent',
-          provider: independent.provider,
-          model: independent.model,
-          input,
-        }),
-      ),
-    ]);
+    );
+
+    const primaryPromise = (async () => {
+      const seen = new Set<string>();
+      const chain = [settings.primary, ...settings.independent].filter((config) => {
+        const key = `${config.provider}:${config.model}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      let lastError: unknown = null;
+      for (const config of chain) {
+        try {
+          return await runAndPersistEvaluation({
+            submissionId,
+            role: 'primary',
+            provider: config.provider,
+            model: config.model,
+            input,
+          });
+        } catch (error) {
+          lastError = error;
+          if (!isTransientProviderError(error)) break;
+          console.warn(
+            `[llm] primario ${config.provider}/${config.model} no disponible (transitorio); probando el siguiente modelo…`,
+          );
+        }
+      }
+      throw lastError instanceof Error
+        ? lastError
+        : new Error('Ningún modelo primario está disponible');
+    })();
+
+    const results = await Promise.allSettled([primaryPromise, ...independentPromises]);
 
     const primaryResult = results[0];
     if (primaryResult.status === 'rejected') {

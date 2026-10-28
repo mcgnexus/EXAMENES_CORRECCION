@@ -22,10 +22,28 @@ const TIMEOUT_MS = 180_000;
 // Reintentos: los picos de carga de los proveedores (503/429) suelen ser
 // transitorios ("spikes are usually temporary"), así que reintenta con espera
 // creciente en lugar de fallar la entrega al primer susto.
-const RETRY_ATTEMPTS = 4;
+const RETRY_ATTEMPTS = 6;
 const RETRY_PER_ATTEMPT_MS = 45_000;
-const RETRY_BACKOFF_MS = [2_000, 4_000, 8_000];
+const RETRY_BACKOFF_MS = [2_000, 5_000, 10_000, 20_000, 30_000];
 const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+/** Error HTTP del proveedor, con estado para decidir si es transitorio. */
+export class ProviderHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ProviderHttpError';
+    this.status = status;
+  }
+}
+
+/** true si el error es transitorio (congestión, límite de tasa, timeout, red). */
+export function isTransientProviderError(error: unknown): boolean {
+  if (error instanceof ProviderHttpError) return RETRY_STATUS.has(error.status);
+  return (
+    error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+  );
+}
 
 function timeoutSignal(): AbortSignal {
   return AbortSignal.timeout(TIMEOUT_MS);
@@ -78,10 +96,13 @@ function isRetryableStatus(status: number): boolean {
   return RETRY_STATUS.has(status);
 }
 
-async function readError(response: Response): Promise<string> {
+async function readError(response: Response): Promise<ProviderHttpError> {
   const text = await response.text().catch(() => '');
   const snippet = text.slice(0, 400);
-  return `HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`;
+  return new ProviderHttpError(
+    response.status,
+    `HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`,
+  );
 }
 
 async function parseGradingResponse(text: string, input: GradingInput): Promise<GradingOutput> {
@@ -122,7 +143,7 @@ const openaiProvider: ProviderDefinition = {
       }),
       signal: ctx.signal ?? timeoutSignal(),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as {
       choices?: { message?: { content?: string } }[];
     };
@@ -155,7 +176,7 @@ const openaiProvider: ProviderDefinition = {
       }),
       signal: ctx.signal ?? timeoutSignal(),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as {
       choices?: { message?: { content?: string } }[];
     };
@@ -175,7 +196,7 @@ const openaiProvider: ProviderDefinition = {
       }),
       signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     return 'Conexión correcta con OpenAI';
   },
 };
@@ -213,7 +234,7 @@ const anthropicProvider: ProviderDefinition = {
       }),
       signal: ctx.signal ?? timeoutSignal(),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as { content?: { type: string; text?: string }[] };
     const text = (data.content ?? [])
       .filter((block) => block.type === 'text')
@@ -246,7 +267,7 @@ const anthropicProvider: ProviderDefinition = {
       }),
       signal: ctx.signal ?? timeoutSignal(),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as { content?: { type: string; text?: string }[] };
     const text = (data.content ?? [])
       .filter((block) => block.type === 'text')
@@ -269,7 +290,7 @@ const anthropicProvider: ProviderDefinition = {
       }),
       signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     return 'Conexión correcta con Anthropic';
   },
 };
@@ -302,7 +323,7 @@ const geminiProvider: ProviderDefinition = {
         signal: ctx.signal ?? timeoutSignal(),
       },
     );
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
@@ -331,7 +352,7 @@ const geminiProvider: ProviderDefinition = {
         signal: ctx.signal ?? timeoutSignal(),
       },
     );
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = (await response.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
@@ -353,7 +374,7 @@ const geminiProvider: ProviderDefinition = {
         signal: AbortSignal.timeout(120_000),
       },
     );
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     return 'Conexión correcta con Google Gemini';
   },
 };
