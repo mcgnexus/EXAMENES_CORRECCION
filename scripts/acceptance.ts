@@ -246,6 +246,44 @@ try {
     'regenerar la plantilla no la duplica (upsert)',
   );
 
+  const markdownDownload = await fetch(
+    `${base}/api/activities/${activityId}/documents/${solucionGenerada?.id}/download?format=md`,
+  );
+  const markdownText = await markdownDownload.text();
+  ok(markdownDownload.status === 200, 'la solución se descarga en Markdown');
+  ok(markdownText.includes('Vigilar al corregir'), 'la descarga Markdown conserva el contenido');
+  const solutionPdf = await fetch(
+    `${base}/api/activities/${activityId}/documents/${solucionGenerada?.id}/download?format=pdf`,
+  );
+  const solutionPdfBuffer = Buffer.from(await solutionPdf.arrayBuffer());
+  ok(solutionPdf.status === 200, 'la solución se descarga en PDF');
+  ok(solutionPdfBuffer.subarray(0, 5).toString() === '%PDF-', 'el PDF de solución es válido');
+
+  const templateActivity = await json<{ activity: { id: number } }>(base, 'POST', '/api/activities', {
+    title: 'Actividad para reutilizar plantilla',
+    subject: 'bioquimica',
+  });
+  const templateActivityId = templateActivity.data.activity.id;
+  const templates = await json<{ id: number; activityId: number; text: string }[]>(
+    base,
+    'GET',
+    `/api/activities/${templateActivityId}/solution-templates`,
+  );
+  ok(
+    templates.status === 200 && templates.data.some((template) => template.activityId === activityId),
+    'las soluciones de la misma asignatura se ofrecen como plantillas',
+  );
+  const templateSource = templates.data.find((template) => template.activityId === activityId);
+  const appliedTemplate = await json<{ id: number; kind: string; name: string; text: string | null }[]>(
+    base,
+    'POST',
+    `/api/activities/${templateActivityId}/solution-templates/${templateSource?.id}`,
+  );
+  ok(
+    appliedTemplate.status === 201 && appliedTemplate.data.some((document) => document.kind === 'solucion' && document.text),
+    'la plantilla seleccionada se copia como solución corregible en la actividad destino',
+  );
+
   // 5. Entregas de dos alumnos (PDF con dos páginas)
   const examA = await makePdf([
     'RESPUESTA DEL ALUMNO A',

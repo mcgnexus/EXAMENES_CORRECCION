@@ -11,6 +11,7 @@ import {
 } from '../mappers';
 import { runProviderSolve, runWithModelFailover } from '../llm/providers';
 import type { ImagePart } from '../llm/types';
+import { buildSolutionPdf } from '../export/solution';
 import { insertFile, readFileBase64, removeOwnerFiles, storeUpload } from '../storage';
 import { collectMultipart } from '../multipart';
 
@@ -50,6 +51,100 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
     const bundle = await getActivityBundle(activityId);
     if (!bundle) throw notFound('Actividad no encontrada');
     return bundle;
+  });
+
+  // Las soluciones de la misma asignatura quedan disponibles como plantillas reutilizables.
+  app.get('/api/activities/:id/solution-templates', async (request) => {
+    const activityId = Number((request.params as { id: string }).id);
+    const activity = await getActivityRow(activityId);
+    if (!activity) throw notFound('Actividad no encontrada');
+    return db
+      .prepare(
+        `SELECT d.id, d.activity_id, a.title AS activity_title, d.name, d.text, d.created_at
+         FROM activity_documents d JOIN activities a ON a.id = d.activity_id
+         WHERE a.subject = $1 AND a.id <> $2 AND d.kind = 'solucion'
+           AND d.text IS NOT NULL AND length(trim(d.text)) > 0
+         ORDER BY d.created_at DESC, d.id DESC`,
+      )
+      .all<{
+        id: number;
+        activity_id: number;
+        activity_title: string;
+        name: string;
+        text: string;
+        created_at: string;
+      }>(activity.subject, activityId)
+      .then((rows) =>
+        rows.map((row) => ({
+          id: row.id,
+          activityId: row.activity_id,
+          activityTitle: row.activity_title,
+          name: row.name,
+          text: row.text,
+          createdAt: row.created_at,
+        })),
+      );
+  });
+
+  app.post('/api/activities/:id/solution-templates/:documentId', async (request, reply) => {
+    const activityId = Number((request.params as { id: string }).id);
+    const documentId = Number((request.params as { documentId: string }).documentId);
+    const activity = await getActivityRow(activityId);
+    if (!activity) throw notFound('Actividad no encontrada');
+    const template = await db
+      .prepare(
+        `SELECT d.name, d.text FROM activity_documents d
+         JOIN activities a ON a.id = d.activity_id
+         WHERE d.id = $1 AND d.kind = 'solucion' AND a.subject = $2
+           AND a.id <> $3 AND d.text IS NOT NULL AND length(trim(d.text)) > 0`,
+      )
+      .get<{ name: string; text: string }>(documentId, activity.subject, activityId);
+    if (!template) throw notFound('Plantilla no encontrada para esta asignatura');
+    const name = `Plantilla · ${template.name}`.slice(0, 200);
+    await db
+      .prepare(
+        "INSERT INTO activity_documents (activity_id, kind, name, text, created_at) VALUES ($1, 'solucion', $2, $3, $4)",
+      )
+      .run(activityId, name, template.text, nowIso());
+    reply.code(201);
+    return listDocuments(activityId);
+  });
+
+  app.get('/api/activities/:activityId/documents/:documentId/download', async (request, reply) => {
+    const { activityId: rawActivityId, documentId: rawDocumentId } = request.params as {
+      activityId: string;
+      documentId: string;
+    };
+    const activityId = Number(rawActivityId);
+    const documentId = Number(rawDocumentId);
+    const row = await db
+      .prepare(
+        `SELECT d.name, d.text, a.title AS activity_title
+         FROM activity_documents d JOIN activities a ON a.id = d.activity_id
+         WHERE d.id = $1 AND d.activity_id = $2 AND d.kind = 'solucion'`,
+      )
+      .get<{ name: string; text: string | null; activity_title: string }>(documentId, activityId);
+    if (!row) throw notFound('Solución no encontrada');
+    if (!row.text?.trim()) throw badRequest('La solución no contiene texto para descargar');
+    const format = (request.query as { format?: string }).format;
+    if (format === 'md') {
+      reply
+        .type('text/markdown; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename="solucion-${documentId}.md"`)
+        .header('Cache-Control', 'no-store');
+      return row.text;
+    }
+    if (format !== 'pdf') throw badRequest('Formato inválido. Usa format=md o format=pdf');
+    const pdf = await buildSolutionPdf({
+      title: row.name,
+      activityTitle: row.activity_title,
+      markdown: row.text,
+    });
+    return reply
+      .type('application/pdf')
+      .header('Content-Disposition', `attachment; filename="solucion-${documentId}.pdf"`)
+      .header('Cache-Control', 'no-store')
+      .send(pdf);
   });
 
   app.post('/api/activities', async (request, reply) => {

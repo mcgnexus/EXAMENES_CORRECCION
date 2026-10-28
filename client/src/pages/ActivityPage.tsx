@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type {
   ActivityBundle,
   ClassRow,
@@ -7,6 +9,7 @@ import type {
   JobRow,
   RubricItem,
   StudentRow,
+  SolutionTemplateRow,
   Subject,
   SubmissionRow,
 } from '../../../shared/types';
@@ -74,6 +77,9 @@ export default function ActivityPage() {
   const [docKind, setDocKind] = useState<DocumentKind>('enunciado');
   const [docName, setDocName] = useState('');
   const [solveBusy, setSolveBusy] = useState(false);
+  const [solutionTemplates, setSolutionTemplates] = useState<SolutionTemplateRow[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templatesBusy, setTemplatesBusy] = useState(false);
   const docInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [uploadTarget, setUploadTarget] = useState<StudentRow | null>(null);
@@ -105,6 +111,9 @@ export default function ActivityPage() {
     void apiGet<ClassRow[]>('/api/classes')
       .then(setClasses)
       .catch(() => setClasses([]));
+    void apiGet<SolutionTemplateRow[]>(`/api/activities/${activityId}/solution-templates`)
+      .then(setSolutionTemplates)
+      .catch(() => setSolutionTemplates([]));
   }, [refresh]);
 
   useEffect(() => {
@@ -233,6 +242,21 @@ export default function ActivityPage() {
         setSolveBusy(false);
       }
     }, 'Plantilla de respuestas generada por IA');
+
+  const useSolutionTemplate = () =>
+    run(async () => {
+      if (!selectedTemplateId) throw new Error('Selecciona primero una plantilla');
+      setTemplatesBusy(true);
+      try {
+        await apiSend(
+          `/api/activities/${activityId}/solution-templates/${selectedTemplateId}`,
+          'POST',
+        );
+        await refresh();
+      } finally {
+        setTemplatesBusy(false);
+      }
+    }, 'Plantilla añadida a esta actividad');
 
   const saveRubric = () =>
     run(async () => {
@@ -415,6 +439,39 @@ export default function ActivityPage() {
           </span>
         </div>
 
+        <div className="template-picker">
+          <div>
+            <strong>Reutilizar una solución</strong>
+            <div className="small muted">
+              Plantillas guardadas en otras actividades de {subjectLabel(bundle.activity.subject)}.
+            </div>
+          </div>
+          <div className="row template-picker-controls">
+            <select
+              aria-label="Plantilla de solución de la misma asignatura"
+              value={selectedTemplateId}
+              onChange={(event) => setSelectedTemplateId(event.target.value)}
+              disabled={solutionTemplates.length === 0}
+            >
+              <option value="">
+                {solutionTemplates.length ? 'Selecciona una plantilla…' : 'Aún no hay plantillas disponibles'}
+              </option>
+              {solutionTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.activityTitle} — {template.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn ghost"
+              disabled={!selectedTemplateId || busy || templatesBusy}
+              onClick={useSolutionTemplate}
+            >
+              {templatesBusy ? 'Añadiendo…' : 'Usar plantilla'}
+            </button>
+          </div>
+        </div>
+
         <div className="doc-list" style={{ marginBottom: 14 }}>
           {bundle.documents.map((document) => (
             <div className="doc-item" key={document.id}>
@@ -447,26 +504,23 @@ export default function ActivityPage() {
                 </button>
               </span>
               {document.text && (
-                <details style={{ flexBasis: '100%', marginTop: 6 }}>
-                  <summary className="btn ghost small" style={{ cursor: 'pointer', userSelect: 'none' }}>
-                    Ver texto
+                <details className="markdown-document">
+                  <summary className="btn ghost small">
+                    {document.kind === 'solucion' ? 'Ver solución' : 'Ver texto'}
                   </summary>
-                  <div
-                    style={{
-                      maxHeight: 320,
-                      overflow: 'auto',
-                      whiteSpace: 'pre-wrap',
-                      background: '#f8fafc',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 8,
-                      padding: 10,
-                      marginTop: 6,
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {document.text}
-                  </div>
+                  {document.kind === 'solucion' && (
+                    <span className="row markdown-downloads">
+                      <a className="btn ghost small" href={`/api/activities/${activityId}/documents/${document.id}/download?format=md`} download>
+                        Descargar Markdown
+                      </a>
+                      <a className="btn ghost small" href={`/api/activities/${activityId}/documents/${document.id}/download?format=pdf`} download>
+                        Descargar PDF
+                      </a>
+                    </span>
+                  )}
+                  <article className="markdown-body">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{document.text}</ReactMarkdown>
+                  </article>
                 </details>
               )}
             </div>

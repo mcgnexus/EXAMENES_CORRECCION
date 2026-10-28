@@ -64,6 +64,15 @@ export interface DocumentRow {
   createdAt: string;
 }
 
+export interface SolutionTemplateRow {
+  id: number;
+  activityId: number;
+  activityTitle: string;
+  name: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface FileRow {
   id: number;
   ownerType: 'document' | 'submission';
