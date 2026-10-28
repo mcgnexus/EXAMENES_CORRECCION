@@ -155,7 +155,7 @@ const openaiProvider: ProviderDefinition = {
     return parseGradingResponse(text, input);
   },
   async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
-    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length, input.contexto) }];
     for (const image of input.images) {
       content.push({ type: 'text', text: `— ${image.label} —` });
       content.push({
@@ -280,7 +280,7 @@ const anthropicProvider: ProviderDefinition = {
     return parseGradingResponse(text, input);
   },
   async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
-    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    const content: unknown[] = [{ type: 'text', text: buildScanUserPrompt(input.esperado, input.images.length, input.contexto) }];
     for (const image of input.images) {
       content.push({ type: 'text', text: `— ${image.label} —` });
       content.push({
@@ -405,7 +405,7 @@ const geminiProvider: ProviderDefinition = {
     return parseGradingResponse(text, input);
   },
   async scan(input: ScanInput, ctx: ProviderCallContext): Promise<ScanResult> {
-    const parts: unknown[] = [{ text: buildScanUserPrompt(input.esperado, input.images.length) }];
+    const parts: unknown[] = [{ text: buildScanUserPrompt(input.esperado, input.images.length, input.contexto) }];
     for (const image of input.images) {
       parts.push({ text: `— ${image.label} —` });
       parts.push({ inline_data: { mime_type: image.mime, data: image.base64 } });

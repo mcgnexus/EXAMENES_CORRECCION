@@ -78,6 +78,7 @@ export default function ActivityPage() {
   const [docKind, setDocKind] = useState<DocumentKind>('enunciado');
   const [docName, setDocName] = useState('');
   const [solveBusy, setSolveBusy] = useState(false);
+  const [rubricBusy, setRubricBusy] = useState(false);
   const [solutionTemplates, setSolutionTemplates] = useState<SolutionTemplateRow[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [templatesBusy, setTemplatesBusy] = useState(false);
@@ -264,6 +265,32 @@ export default function ActivityPage() {
         setTemplatesBusy(false);
       }
     }, 'Plantilla añadida a esta actividad');
+
+  const generateRubric = () =>
+    run(async () => {
+      if (
+        (rubricDraft ?? []).length > 0 &&
+        !confirm('Esto reemplazará los apartados actuales por la propuesta de la IA. ¿Continuar?')
+      ) {
+        return;
+      }
+      setRubricBusy(true);
+      try {
+        const proposal = await apiSend<{
+          items: { title: string; description: string; maxPoints: number }[];
+          observaciones?: string;
+        }>(`/api/activities/${activityId}/generate-rubric`, 'POST');
+        setRubricDraft(
+          proposal.items.map((item) => ({
+            title: item.title,
+            description: item.description,
+            maxPoints: item.maxPoints,
+          })),
+        );
+      } finally {
+        setRubricBusy(false);
+      }
+    }, 'Rúbrica propuesta por la IA. Revísala y pulsa «Guardar rúbrica».');
 
   const saveRubric = () =>
     run(async () => {
@@ -631,6 +658,14 @@ export default function ActivityPage() {
         </div>
 
         <div className="actions" style={{ marginTop: 12 }}>
+          <button
+            className="btn"
+            onClick={generateRubric}
+            disabled={busy || rubricBusy}
+            title="Usa el enunciado, la plantilla y los documentos de la actividad"
+          >
+            {rubricBusy ? 'Generando rúbrica…' : 'Generar rúbrica con IA'}
+          </button>
           <button
             className="btn"
             onClick={() =>

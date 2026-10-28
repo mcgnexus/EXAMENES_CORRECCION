@@ -220,16 +220,31 @@ export function buildScanSystemPrompt(esperado: 'auto' | 'examen' | 'lista'): st
 export function buildScanUserPrompt(
   esperado: 'auto' | 'examen' | 'lista',
   imageCount: number,
+  contexto?: string,
 ): string {
-  return [
-    imageCount === 1
-      ? 'Adjunto 1 imagen del documento a escanear.'
-      : `Adjunto ${imageCount} imágenes del documento, en orden de lectura.`,
-    'Devuelve únicamente el JSON indicado.',
-    esperado === 'auto' ? '' : 'Recuerda el tipo de documento esperado indicado antes.',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const parts: string[] = [];
+  if (imageCount === 0) {
+    parts.push('No se adjuntan imágenes: trabaja solo con el texto aportado.');
+  } else if (imageCount === 1) {
+    parts.push('Adjunto 1 imagen del documento a escanear.');
+  } else {
+    parts.push(`Adjunto ${imageCount} imágenes del documento, en orden de lectura.`);
+  }
+  if (contexto?.trim()) {
+    parts.push(
+      '',
+      'Material de la actividad (enunciado, solución/plantilla y criterios, si existen):',
+      contexto.trim().slice(0, 16000),
+      '',
+      'Al definir "apartados" para la corrección, básate en este material y en las preguntas visibles.',
+      'Agrupa las preguntas tipo test o los incisos menores en bloques corregibles, en lugar de crear',
+      'un apartado por pregunta si hay muchas. Mantén la puntuación original cuando aparezca; si no,',
+      'reparte una puntuación razonable. Cada apartado debe describir qué debe demostrar el alumno.',
+    );
+  }
+  parts.push('Devuelve únicamente el JSON indicado.');
+  if (esperado !== 'auto') parts.push('Recuerda el tipo de documento esperado indicado antes.');
+  return parts.filter(Boolean).join('\n');
 }
 
 export const scanResponseSchema = z.object({

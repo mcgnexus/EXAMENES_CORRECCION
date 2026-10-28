@@ -9,7 +9,7 @@ import {
   listDocuments,
   listRubric,
 } from '../mappers';
-import { runProviderSolve, runWithModelFailover } from '../llm/providers';
+import { runProviderScan, runProviderSolve, runWithModelFailover } from '../llm/providers';
 import type { ImagePart } from '../llm/types';
 import { buildSolutionPdf } from '../export/solution';
 import { insertFile, readFileBase64, removeOwnerFiles, storeUpload } from '../storage';
@@ -313,6 +313,88 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
 
     reply.code(201);
     return (await listDocuments(activityId)).find((document) => document.id === documentId);
+  });
+
+  // Propone la rúbrica a partir del enunciado, la solución/plantilla y el resto de documentos.
+  app.post('/api/activities/:id/generate-rubric', async (request) => {
+    const activityId = Number((request.params as { id: string }).id);
+    const activity = await getActivityRow(activityId);
+    if (!activity) throw notFound('Actividad no encontrada');
+
+    const documents = await listDocuments(activityId);
+    const labels: Record<string, string> = {
+      enunciado: 'Enunciado',
+      solucion: 'Solución o plantilla',
+      rubrica: 'Rúbrica existente',
+      documentacion: 'Documentación',
+    };
+    const contextParts: string[] = [];
+    if (activity.description.trim()) contextParts.push(`Descripción: ${activity.description.trim()}`);
+    for (const doc of documents) {
+      if (!doc.text?.trim()) continue;
+      contextParts.push(`${labels[doc.kind] ?? doc.kind} · ${doc.name}:\n${doc.text.trim()}`);
+    }
+
+    const images: ImagePart[] = [];
+    const settings = await getSettings();
+    if (settings.includeImages) {
+      for (const doc of documents.filter((item) => item.kind === 'enunciado')) {
+        const pages = await db
+          .prepare(
+            "SELECT stored_path, mime FROM files WHERE owner_type = 'document' AND owner_id = $1 AND kind = 'page' ORDER BY page_no ASC, id ASC",
+          )
+          .all<{ stored_path: string; mime: string }>(doc.id);
+        for (const page of pages) {
+          if (images.length >= settings.maxPagesPerEvaluation) break;
+          if (!page.mime.startsWith('image/')) continue;
+          try {
+            images.push({
+              label: `Enunciado · ${doc.name} · página ${images.length + 1}`,
+              mime: page.mime,
+              base64: await readFileBase64(page.stored_path),
+            });
+          } catch {
+            /* página antigua o ya eliminada: seguimos con el texto disponible */
+          }
+        }
+        if (images.length >= settings.maxPagesPerEvaluation) break;
+      }
+    }
+
+    if (contextParts.length === 0 && images.length === 0) {
+      throw badRequest('Sube el enunciado o la plantilla para poder proponer la rúbrica');
+    }
+
+    let result;
+    try {
+      result = await runWithModelFailover(
+        settings.primary,
+        settings.independent,
+        (provider, model) =>
+          runProviderScan(provider, model, {
+            esperado: 'examen',
+            images,
+            contexto: contextParts.join('\n\n'),
+          }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw badRequest(`No se ha podido generar la rúbrica: ${message}`);
+    }
+
+    const items = result.apartados
+      .map((item) => ({
+        title: item.title.trim(),
+        description: item.description.trim(),
+        maxPoints: item.maxPoints,
+      }))
+      .filter((item) => item.title.length > 0);
+    if (items.length === 0) {
+      throw badRequest(
+        'El modelo no ha propuesto apartados. Revisa que el enunciado se lea bien o crea la rúbrica manualmente.',
+      );
+    }
+    return { items, observaciones: result.observaciones };
   });
 
   // Genera la plantilla de respuestas con IA cuando no existe solución de referencia.

@@ -9,6 +9,8 @@ export interface ImagePart {
 export interface ScanInput {
   esperado: 'auto' | 'examen' | 'lista';
   images: ImagePart[];
+  /** Texto adicional (enunciado, solución o rúbrica) para proponer apartados. */
+  contexto?: string;
 }
 
 export interface SolveInput {

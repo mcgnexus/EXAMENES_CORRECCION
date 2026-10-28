@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildSolveSystemPrompt, buildSystemPrompt, normalizeModelOutput } from './prompts';
+import {
+  buildScanUserPrompt,
+  buildSolveSystemPrompt,
+  buildSystemPrompt,
+  normalizeModelOutput,
+  parseScanResponse,
+} from './prompts';
 import type { GradingInput } from './types';
 
 const gradingInput: GradingInput = {
@@ -41,5 +47,30 @@ describe('instrucciones de evaluación por apartado', () => {
     const prompt = buildSolveSystemPrompt('biologia');
     expect(prompt).toContain('no omitas apartados');
     expect(prompt).toContain('no lo inventes');
+  });
+});
+
+describe('propuesta de rúbrica a partir del material', () => {
+  it('incluye el enunciado y la plantilla en el contexto del escaneo', () => {
+    const prompt = buildScanUserPrompt('examen', 0, 'Pregunta 1: glucólisis\nSolución: 10 pasos');
+    expect(prompt).toContain('glucólisis');
+    expect(prompt).toContain('Solución: 10 pasos');
+    expect(prompt).toContain('bloques corregibles');
+  });
+
+  it('normaliza los apartados propuestos por el modelo', () => {
+    const result = parseScanResponse(
+      JSON.stringify({
+        tipo: 'examen',
+        apartados: [
+          { titulo: 'Bloque 1 · preguntas 1-10', descripcion: 'Metabolismo', puntos: 3 },
+          { titulo: '', descripcion: 'Sin título', puntos: 0 },
+        ],
+      }),
+    );
+    expect(result.apartados).toHaveLength(2);
+    expect(result.apartados[0]).toMatchObject({ title: 'Bloque 1 · preguntas 1-10', maxPoints: 3 });
+    expect(result.apartados[1].title).toBe('Apartado 2');
+    expect(result.apartados[1].maxPoints).toBeGreaterThan(0);
   });
 });
