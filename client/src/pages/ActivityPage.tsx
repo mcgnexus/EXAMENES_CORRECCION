@@ -281,7 +281,8 @@ export default function ActivityPage() {
           observaciones?: string;
         }>(`/api/activities/${activityId}/generate-rubric`, 'POST');
         setRubricDraft(
-          proposal.items.map((item) => ({
+          proposal.items.map((item, index) => ({
+            id: (rubricDraft ?? [])[index]?.id,
             title: item.title,
             description: item.description,
             maxPoints: item.maxPoints,
