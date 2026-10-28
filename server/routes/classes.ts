@@ -76,7 +76,9 @@ export async function registerClassRoutes(app: FastifyInstance): Promise<void> {
       .prepare('SELECT COUNT(*) AS total FROM activities WHERE class_id = $1')
       .get<{ total: number }>(classId);
     if ((linked?.total ?? 0) > 0) {
-      throw conflict('La clase tiene actividades asociadas. Reasígnalas o bórralas primero.');
+      throw conflict(
+        `La clase tiene ${linked?.total} actividad(es) asociada(s). Bórralas o reasígnalas primero si quieres eliminarla.`,
+      );
     }
     await db.prepare('DELETE FROM classes WHERE id = $1').run(classId);
     reply.code(204).send();

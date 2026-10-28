@@ -446,6 +446,29 @@ export default function ActivityPage() {
                   Quitar
                 </button>
               </span>
+              {document.text && (
+                <details style={{ flexBasis: '100%', marginTop: 6 }}>
+                  <summary className="btn ghost small" style={{ cursor: 'pointer', userSelect: 'none' }}>
+                    Ver texto
+                  </summary>
+                  <div
+                    style={{
+                      maxHeight: 320,
+                      overflow: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      background: '#f8fafc',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 8,
+                      padding: 10,
+                      marginTop: 6,
+                      fontSize: 13,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {document.text}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
           {bundle.documents.length === 0 && (
