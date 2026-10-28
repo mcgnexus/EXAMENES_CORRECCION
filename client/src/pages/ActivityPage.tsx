@@ -14,6 +14,7 @@ import type {
   SubmissionRow,
 } from '../../../shared/types';
 import { apiGet, apiSend, apiUpload, errorMessage, fileUrl } from '../api';
+import { expandPdfFiles } from '../pdf';
 
 interface RubricDraft {
   id?: number;
@@ -203,7 +204,10 @@ export default function ActivityPage() {
       const form = new FormData();
       form.append('activityId', String(activityId));
       form.append('studentId', String(target.id));
-      for (const file of Array.from(files)) form.append('files', file);
+      const pages = await expandPdfFiles(Array.from(files), (progress) =>
+        setNotice(`${progress.file}: página ${progress.page} de ${progress.totalPages}`),
+      );
+      for (const file of pages) form.append('files', file);
       await apiUpload('/api/submissions', form);
       await refresh();
     }, `Entrega subida para ${target.name}`);
@@ -217,7 +221,10 @@ export default function ActivityPage() {
       const form = new FormData();
       form.append('kind', docKind);
       if (docName.trim()) form.append('name', docName.trim());
-      form.append('file', file);
+      const pages = await expandPdfFiles([file], (progress) =>
+        setNotice(`${progress.file}: página ${progress.page} de ${progress.totalPages}`),
+      );
+      for (const page of pages) form.append('files', page);
       await apiUpload(`/api/activities/${activityId}/documents`, form);
       setDocName('');
       await refresh();

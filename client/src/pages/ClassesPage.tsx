@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClassRow, ScanResult, StudentRow, Subject } from '../../../shared/types';
 import { apiGet, apiSend, apiUpload, errorMessage } from '../api';
+import { expandPdfFiles } from '../pdf';
 
 export default function ClassesPage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -95,7 +96,8 @@ export default function ClassesPage() {
       try {
         const form = new FormData();
         form.append('esperado', 'lista');
-        form.append('file', file);
+        const pages = await expandPdfFiles([file]);
+        for (const page of pages) form.append('file', page);
         const result = await apiUpload<ScanResult>('/api/scan', form);
         const names = result.nombres.filter(Boolean);
         if (names.length === 0) {

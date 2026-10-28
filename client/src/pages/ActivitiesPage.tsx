@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ActivityRow, ClassRow, ScanResult, ScanRubricItem, Subject } from '../../../shared/types';
 import { apiGet, apiSend, apiUpload, errorMessage } from '../api';
+import { expandPdfFiles } from '../pdf';
 
 function subjectLabel(subject: string): string {
   return subject === 'bioquimica' ? 'Bioquímica' : 'Biología';
@@ -73,7 +74,8 @@ export default function ActivitiesPage() {
     (async () => {
       const form = new FormData();
       form.append('esperado', 'examen');
-      form.append('file', file);
+      const pages = await expandPdfFiles([file]);
+      for (const page of pages) form.append('file', page);
       const result = await apiUpload<ScanResult>('/api/scan', form);
       if (
         result.tipo === 'lista' &&

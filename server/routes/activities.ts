@@ -266,13 +266,12 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
     const activityId = Number((request.params as { id: string }).id);
     await assertActivity(activityId);
     const { fields, files } = await collectMultipart(request);
-    const file = files[0];
-    if (!file) throw badRequest('Falta el archivo del documento');
+    if (files.length === 0) throw badRequest('Falta el archivo del documento');
     const kindParsed = documentKind.safeParse(fields.kind);
     if (!kindParsed.success) {
       throw badRequest('Tipo de documento inválido (enunciado, solucion, rubrica o documentacion)');
     }
-    const name = (fields.name ?? file.filename).trim() || file.filename;
+    const name = (fields.name ?? files[0].filename).trim() || files[0].filename;
 
     const created = await db
       .prepare(
@@ -281,31 +280,35 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
       .get<{ id: number }>(activityId, kindParsed.data, name, nowIso());
     const documentId = created?.id ?? 0;
 
-    const stored = await storeUpload('document', documentId, file);
-    if (stored.text !== null) {
-      await db
-        .prepare('UPDATE activity_documents SET text = $1 WHERE id = $2')
-        .run(stored.text, documentId);
-    }
-    await insertFile({
-      ownerType: 'document',
-      ownerId: documentId,
-      originalName: stored.original.originalName,
-      storedPath: stored.original.storedPath,
-      mime: stored.original.mime,
-      kind: 'original',
-      pageNo: null,
-    });
-    for (const page of stored.pages) {
+    let pageNo = 0;
+    for (const file of files) {
+      const stored = await storeUpload('document', documentId, file);
+      if (stored.text !== null) {
+        await db
+          .prepare('UPDATE activity_documents SET text = $1 WHERE id = $2')
+          .run(stored.text, documentId);
+      }
       await insertFile({
         ownerType: 'document',
         ownerId: documentId,
         originalName: stored.original.originalName,
-        storedPath: page.storedPath,
-        mime: page.mime,
-        kind: 'page',
-        pageNo: page.pageNo,
+        storedPath: stored.original.storedPath,
+        mime: stored.original.mime,
+        kind: 'original',
+        pageNo: null,
       });
+      for (const page of stored.pages) {
+        pageNo += 1;
+        await insertFile({
+          ownerType: 'document',
+          ownerId: documentId,
+          originalName: stored.original.originalName,
+          storedPath: page.storedPath,
+          mime: page.mime,
+          kind: 'page',
+          pageNo,
+        });
+      }
     }
 
     reply.code(201);

@@ -101,9 +101,9 @@ privado**; en local, en `data/files/`.
   Vercel aporta `BLOB_READ_WRITE_TOKEN`; sin ese token se usa el disco local.
 - **Variables necesarias:** `DATABASE_URL`, `AUTH_USER`, `AUTH_PASSWORD`,
   `GEMINI_API_KEY` y las credenciales de Blob que conecta Vercel.
-- **Límites:** las funciones admiten cuerpos de hasta ~4,5 MB; para PDFs o fotos
-  mayores hace falta subida directa al Blob desde el navegador. La conversión de
-  PDF con Poppler no está disponible en Vercel: sube las páginas como imágenes.
+- **Límites:** las funciones admiten cuerpos de hasta ~4,5 MB. Los PDF se convierten
+  en imágenes JPEG por página en el navegador con PDF.js (hasta 40 páginas), evitando
+  depender de Poppler en el servidor.
 - **Despliegue:** `npx vercel deploy --prod`.
 
 ## Despliegue alternativo en Railway
