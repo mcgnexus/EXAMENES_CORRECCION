@@ -18,8 +18,8 @@ import { registerExportRoutes } from './routes/export';
 import { registerEventRoutes } from './routes/events';
 import { registerScanRoutes } from './routes/scan';
 
-export async function buildServer(): Promise<FastifyInstance> {
-  await recoverInterruptedWork();
+export async function buildServer(options: { serverless?: boolean } = {}): Promise<FastifyInstance> {
+  if (!options.serverless) await recoverInterruptedWork();
 
   const app = Fastify({
     logger: {
@@ -79,7 +79,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   const clientDir = path.join(ROOT, 'dist', 'client');
   const hasClient = fs.existsSync(path.join(clientDir, 'index.html'));
 
-  if (hasClient) {
+  if (hasClient && !options.serverless) {
     await app.register(fastifyStatic, {
       root: clientDir,
       prefix: '/',
@@ -92,7 +92,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       reply.code(404).send({ error: 'Ruta no encontrada' });
       return;
     }
-    if (hasClient) {
+    if (hasClient && !options.serverless) {
       return reply.sendFile('index.html');
     }
     return reply

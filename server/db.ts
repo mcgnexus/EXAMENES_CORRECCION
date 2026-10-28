@@ -15,9 +15,14 @@ if (fs.existsSync(ENV_FILE)) {
   }
 }
 
-export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? path.join(ROOT, 'data'));
+export const DATA_DIR = path.resolve(
+  process.env.DATA_DIR ??
+    (process.env.VERCEL ? path.join('/tmp', 'examenes-correccion') : path.join(ROOT, 'data')),
+);
 export const FILES_DIR = path.join(DATA_DIR, 'files');
 
+// En Vercel solo /tmp es escribible. Es una ubicación efímera; producción debe
+// configurar almacenamiento de objetos antes de aceptar archivos.
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
