@@ -5,6 +5,7 @@ import { runProviderEvaluation, runWithModelFailover } from '../llm/providers';
 import type { GradingInput, ImagePart } from '../llm/types';
 import { listRubric } from '../mappers';
 import { proposeGrade, round1, type EvaluationLike, type ScoreLike } from './aggregate';
+import { confirmedOmrAnswers } from '../routes/omr';
 
 interface SubmissionDbRow {
   id: number;
@@ -74,7 +75,7 @@ async function toImageParts(
   return parts;
 }
 
-async function buildGradingInput(
+export async function buildGradingInput(
   submissionId: number,
   settings: AppSettings,
 ): Promise<GradingInput> {
@@ -87,6 +88,7 @@ async function buildGradingInput(
     .prepare('SELECT * FROM activities WHERE id = $1')
     .get<ActivityDbRow>(submission.activity_id);
   if (!activity) throw new Error('Actividad no encontrada');
+  const omr=await confirmedOmrAnswers(submissionId,activity.id);
 
   const rubric = await listRubric(activity.id);
   if (rubric.length === 0) throw new Error('La actividad no tiene apartados en la rúbrica');
@@ -96,7 +98,7 @@ async function buildGradingInput(
     .all<DocumentDbRow>(activity.id);
 
   const studentPages = await pageFiles('submission', submissionId);
-  if (studentPages.length === 0) {
+  if (!omr && studentPages.length === 0) {
     throw new Error('La entrega no tiene páginas legibles (sube una foto o un PDF)');
   }
 
@@ -118,7 +120,7 @@ async function buildGradingInput(
   if (settings.includeImages) {
     // Cada fuente tiene su propio presupuesto: la entrega larga no debe
     // consumir el espacio del enunciado y ocultar preguntas al modelo.
-    images = await toImageParts(
+    images = omr ? [] : await toImageParts(
       studentPages.slice(0, maxPagesPerDocument),
       `RESPUESTA DEL ALUMNO (primeras ${Math.min(studentPages.length, maxPagesPerDocument)} de ${studentPages.length} páginas)`,
       readFileBase64,
@@ -160,9 +162,10 @@ async function buildGradingInput(
       maxPoints: item.maxPoints,
     })),
     documentText,
-    solutionText,
+    solutionText: omr ? `Clave de referencia confirmada (extraída de las soluciones de la actividad):\n${JSON.stringify(omr.config.key)}\nReglas de puntuación: ${JSON.stringify(omr.config.scoring)}\n\nSoluciones generadas/de referencia:\n${solutionText}` : solutionText,
     images,
     seed: submission.id,
+    ...(omr?{detectedAnswers:omr.answers}:{}),
   };
 }
 

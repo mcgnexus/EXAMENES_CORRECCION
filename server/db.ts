@@ -190,6 +190,12 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     config JSONB NOT NULL,
     updated_at TEXT NOT NULL
   );`},
+  {id:'003_omr_answers',sql:`CREATE TABLE IF NOT EXISTS submission_omr_answers (
+    submission_id BIGINT PRIMARY KEY REFERENCES submissions(id) ON DELETE CASCADE,
+    answers JSONB NOT NULL,
+    config JSONB NOT NULL,
+    confirmed_at TEXT NOT NULL
+  );`},
 ];
 
 type Runner = (sql: string, params: unknown[]) => Promise<QueryResult>;

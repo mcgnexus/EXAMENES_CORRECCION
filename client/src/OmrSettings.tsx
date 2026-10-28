@@ -30,7 +30,7 @@ export default function OmrSettings({activityId,documents}:{activityId:number;do
   const updateTemplate=(template:OmrConfig['template'])=>change({...config,template,key:{},keyConfirmed:false});
   async function save(){
     setBusy(true);setMessage('');
-    try{const c=configSchema.parse(config);await apiSend(`/api/activities/${activityId}/omr`,'PUT',c);setMessage('Plantilla, clave y puntuación guardadas para esta actividad.');}
+    try{const c=configSchema.parse(config);await apiSend(`/api/activities/${activityId}/omr`,'PUT',c);window.dispatchEvent(new Event('app-workflow-updated'));setMessage('Plantilla, clave y puntuación guardadas para esta actividad.');}
     catch(e){setMessage(errorMessage(e));}finally{setBusy(false);}
   }
   async function extract(){
@@ -38,6 +38,7 @@ export default function OmrSettings({activityId,documents}:{activityId:number;do
     try{
       // Extraction uses exactly the template visible in the editor.
       await apiSend(`/api/activities/${activityId}/omr`,'PUT',configSchema.parse({...config,keyConfirmed:false}));
+      window.dispatchEvent(new Event('app-workflow-updated'));
       const r=await apiSend<{key:Record<string,string>;warnings:string[]}>(`/api/activities/${activityId}/omr/extract-key`,'POST',{documentId:Number(documentId)});
       setConfig(c=>({...c,key:r.key,keyConfirmed:false}));
       setMessage(`Propuesta extraída, aún sin confirmar ni guardar. ${r.warnings.join(' ')}`);

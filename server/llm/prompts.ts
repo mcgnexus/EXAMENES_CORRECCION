@@ -9,6 +9,12 @@ export const SUBJECT_LABEL: Record<string, string> = {
 
 export function buildSystemPrompt(input: GradingInput): string {
   return [
+    ...(input.detectedAnswers ? [
+      'MODO TEST OMR: la ÚNICA fuente de respuestas del alumno es la lista estructurada DETECTOR DE BURBUJAS CONFIRMADO.',
+      'No se adjunta ninguna foto de la entrega del alumno. Las imágenes adjuntas son únicamente enunciados o soluciones de referencia: NUNCA las interpretes como respuestas del alumno.',
+      'No transcribas ni reconstruyas marcas. Un valor null en la lista significa EN BLANCO, nunca una respuesta implícita. No alteres ninguna opción detectada.',
+      'Compara las opciones detectadas con las soluciones generadas por los LLM y la clave confirmada de referencia de la actividad. Cita número, opción del alumno y opción de referencia. Si falta una solución o es contradictoria, solicita revisión sin inventarla.',
+    ] : []),
     `Eres un corrector experto y riguroso de exámenes universitarios de ${SUBJECT_LABEL[input.subject] ?? input.subject}.`,
     'Corriges exámenes manuscritos escaneados o fotografiados. Debes interpretar con cuidado:',
     'Si la entrega es una hoja de respuestas tipo burbujas/test, NO deduzcas respuestas por contexto ni por la solución:',
@@ -25,7 +31,7 @@ export function buildSystemPrompt(input: GradingInput): string {
     '- Los puntos deben estar entre 0 y el máximo del apartado, con un decimal (0.1).',
     '- Comentarios breves (1-3 frases), concretos y en español, citando la evidencia del examen.',
     '- No penalices dos veces el mismo error dentro del mismo apartado.',
-    '- Antes de puntuar, recorre visualmente TODAS las páginas adjuntas de la entrega y localiza cada pregunta de la rúbrica.',
+    input.detectedAnswers ? '- Antes de puntuar, recorre toda la lista confirmada del detector, sin inferir respuestas de imágenes.' : '- Antes de puntuar, recorre visualmente TODAS las páginas adjuntas de la entrega y localiza cada pregunta de la rúbrica.',
     '- Para CADA apartado distingue explícitamente: RESPONDIDO, EN BLANCO (la pregunta se ve y no hay respuesta) o NO LOCALIZABLE (no puedes encontrar la pregunta en las páginas recibidas).',
     '- EN BLANCO recibe 0 puntos y el comentario debe comenzar por "EN BLANCO". No confundas una hoja/página en blanco con una pregunta no localizada.',
     '- NO LOCALIZABLE recibe 0 puntos provisionales; no lo presentes como respuesta correcta.',
@@ -57,6 +63,9 @@ export function buildUserPrompt(input: GradingInput): string {
     'Rúbrica (apartados):',
     JSON.stringify(rubric, null, 2),
   ];
+  if(input.detectedAnswers){
+    parts.push('DETECTOR DE BURBUJAS CONFIRMADO — fuente exclusiva de respuestas del alumno:',JSON.stringify(input.detectedAnswers),'null significa EN BLANCO. Las imágenes no pertenecen a la entrega del alumno.');
+  }
 
   if (input.documentText.trim()) {
     parts.push('', 'Enunciado (texto):', input.documentText.trim().slice(0, 12000));
@@ -147,7 +156,7 @@ export function normalizeModelOutput(
   });
 
   return {
-    reading: parsed.reading.trim(),
+    reading: input.detectedAnswers ? `DETECTOR DE BURBUJAS CONFIRMADO\n${input.detectedAnswers.map(a=>`${a.question}: ${a.answer??'[EN BLANCO]'}`).join('\n')}` : parsed.reading.trim(),
     overallComment: parsed.overallComment.trim(),
     items,
   };

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { EvaluationRow, SubmissionDetail } from '../../../shared/types';
 import { apiGet, apiSend, errorMessage, fileUrl } from '../api';
 import { questionCount,type OmrConfig } from '../../../shared/omr';
+import GuidePanel from '../GuidePanel';
 
 interface ItemForm {
   points: number;
@@ -56,12 +57,17 @@ export default function ReviewPage() {
   const [bubbleAnswers, setBubbleAnswers] = useState<BubbleResult[] | null>(null);
   const [answerKey, setAnswerKey] = useState<Record<number, string>>({});
   const [omrConfig,setOmrConfig]=useState<OmrConfig|null>(null);
+  const [testWorkflow,setTestWorkflow]=useState<{test:boolean;keyConfirmed:boolean;confirmed:boolean}|null>(null);
   const [bubblesConfirmed, setBubblesConfirmed] = useState(false);
   const [bubbleGrade, setBubbleGrade] = useState<{correct:number;wrong:number;blank:number;total:number;raw:number;scale:number}|null>(null);
 
   const load = async () => {
     const data = await apiGet<SubmissionDetail>(`/api/submissions/${submissionId}`);
     setDetail(data);
+    try{
+      const progress=await apiGet<{test:boolean;keyConfirmed:boolean;confirmedIds:number[]}>(`/api/activities/${data.activity.id}/workflow`);
+      setTestWorkflow({test:progress.test,keyConfirmed:progress.keyConfirmed,confirmed:progress.confirmedIds.includes(submissionId)});
+    }catch{setTestWorkflow(null);}
     return data;
   };
 
@@ -76,6 +82,7 @@ export default function ReviewPage() {
     setBubbleAnswers(null);
     setAnswerKey({});
     setOmrConfig(null);
+    setTestWorkflow(null);
     void load().catch((err) => setError(errorMessage(err)));
   }, [submissionId]);
 
@@ -141,6 +148,7 @@ export default function ReviewPage() {
       setAnswerKey(result.config.key);
       setBubblesConfirmed(false);
       setBubbleGrade(null);
+      setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
       setNotice('Detección lista. Revisa y corrige cada fila antes de calificar.');
     } catch (err) { setError(errorMessage(err)); }
     finally { setBubbleBusy(false); }
@@ -153,6 +161,8 @@ export default function ReviewPage() {
       { answers: bubbleAnswers.map(x => ({question:x.question, answer:x.answer})), config:omrConfig, confirmed:true },
     );
     setBubbleGrade(result);
+    setTestWorkflow({test:true,keyConfirmed:true,confirmed:true});
+    window.dispatchEvent(new Event('app-workflow-updated'));
   }
 
   const total = useMemo(() => {
@@ -224,12 +234,20 @@ export default function ReviewPage() {
         </div>
       </div>
 
+      {testWorkflow&&<GuidePanel steps={[
+        ...(testWorkflow.test?[
+          {id:'key',title:'Confirmar la clave de la actividad',detail:'Extrae la clave de la solución generada, revísala y guárdala confirmada antes de corregir.',done:testWorkflow.keyConfirmed,href:`/activities/${detail.activity.id}#activity-omr`},
+          {id:'detect',title:'Detectar y confirmar las respuestas',detail:'Pulsa Detectar burbujas, coteja la lista con la imagen y resuelve las dudas. Marca la casilla de revisión y pulsa Confirmar respuestas. Solo esa lista se enviará al LLM.',done:testWorkflow.confirmed,href:'#submission-detection'},
+        ]:[]),
+        {id:'evaluate',title:'Lanzar la corrección desde la actividad',detail:'Selecciona esta entrega y lanza la corrección. Espera a que los modelos terminen.',done:['reviewed','approved','exported'].includes(detail.submission.status)&&detail.evaluations.some(e=>e.role==='primary'&&e.status==='done'),href:`/activities/${detail.activity.id}#activity-submissions`},
+        {id:'approve',title:'Revisar, guardar y aprobar la nota',detail:'Compara los comentarios con las respuestas y la solución. Ajusta la propuesta y aprueba únicamente cuando hayas terminado de revisarla.',done:isApproved,href:'#submission-grade'},
+      ]}/>}
       {error && (
         <div className="notice" style={{ marginBottom: 14 }}>
           {error}
         </div>
       )}
-      <section className="card" style={{marginBottom:16}}>
+      <section className="card" id="submission-detection" style={{marginBottom:16}}>
         <div className="card-head"><h2>Corrección de test · {omrConfig?.template.name??'plantilla de la actividad'} (primera página)</h2>
           <button className="btn" disabled={bubbleBusy} onClick={() => void detectBubbles()}>{bubbleBusy ? 'Detectando…' : 'Detectar burbujas'}</button>
         </div>
@@ -239,7 +257,7 @@ export default function ReviewPage() {
             {bubbleAnswers.map(row => <tr key={row.question}>
               <td>{row.question}{row.state==='ambiguous' ? ' · REVISAR' : ''}</td>
               <td><select aria-label={`Respuesta pregunta ${row.question}`} value={row.state==='ambiguous' ? '?' : row.answer ?? ''} onChange={e => {
-                setBubblesConfirmed(false);setBubbleGrade(null);
+                setBubblesConfirmed(false);setBubbleGrade(null);setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
                 setBubbleAnswers(prev => prev?.map(x => x.question===row.question ? {...x,answer:e.target.value||null,state:e.target.value?'marked':'blank'} : x)??null);
               }}>{row.state==='ambiguous'&&<option value="?">Dudosa: selecciona una opción</option>}<option value="">En blanco</option>{[...(omrConfig?.template.options??'ABCD')].map(v=><option key={v}>{v}</option>)}</select></td>
               <td>{answerKey[row.question]??'Sin clave confirmada'}</td>
@@ -247,9 +265,9 @@ export default function ReviewPage() {
           </tbody></table></div>
           {!omrConfig?.keyConfirmed&&<p className="notice">Confirma y guarda la clave en la actividad antes de calcular.</p>}
           <label style={{display:'block',marginTop:12}}><input type="checkbox" checked={bubblesConfirmed} onChange={e=>{setBubblesConfirmed(e.target.checked);setBubbleGrade(null);}} /> He cotejado las {omrConfig?questionCount(omrConfig.template):bubbleAnswers.length} respuestas y la clave con los documentos originales.</label>
-          <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Previsualizar puntuación configurada</button>
+          <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Confirmar respuestas y previsualizar puntuación</button>
           {omrConfig&&<p className="small muted">Acierto {omrConfig.scoring.correct}; error {omrConfig.scoring.wrong}; blanco {omrConfig.scoring.blank}; escala {omrConfig.scoring.scale}.</p>}
-          {bubbleGrade && <p role="status">{bubbleGrade.correct} aciertos · {bubbleGrade.wrong} errores · {bubbleGrade.blank} en blanco · Bruto: {bubbleGrade.raw.toFixed(2)} · Nota: {bubbleGrade.total.toFixed(2)} / {bubbleGrade.scale}. Solo previsualización; no se ha guardado una nota.</p>}
+          {bubbleGrade && <p role="status">Respuestas confirmadas guardadas: el LLM usará esta lista, no la foto del alumno. {bubbleGrade.correct} aciertos · {bubbleGrade.wrong} errores · {bubbleGrade.blank} en blanco · Bruto: {bubbleGrade.raw.toFixed(2)} · Nota: {bubbleGrade.total.toFixed(2)} / {bubbleGrade.scale}. La nota es una previsualización, no una aprobación. Ya puedes lanzar la corrección desde la actividad.</p>}
         </>}
       </section>
       {detail.submission.error && (
@@ -404,7 +422,7 @@ export default function ReviewPage() {
 
           <section className="card">
             <div className="card-head">
-              <h2>Propuesta de corrección por apartado</h2>
+              <h2 id="submission-grade">Propuesta de corrección por apartado</h2>
               <span className="small muted">
                 Las divergencias se marcan en rojo (umbral {detail.divergenceThreshold} pt)
               </span>

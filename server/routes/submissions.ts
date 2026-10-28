@@ -10,7 +10,7 @@ import { runProviderRead, runWithModelFailover } from '../llm/providers';
 import type { ImagePart } from '../llm/types';
 import { round1 } from '../pipeline/aggregate';
 import { detectAnswerSheet } from '../omr';
-import { getOmrConfig } from './omr';
+import { getOmrConfig,confirmedOmrAnswers } from './omr';
 import { scoreAnswers,configSchema } from '../../shared/omr';
 
 const gradeSchema = z.object({
@@ -37,6 +37,7 @@ async function assertSubmission(submissionId: number): Promise<{
 }
 
 async function resetCorrectionData(submissionId: number): Promise<void> {
+  await db.prepare('DELETE FROM submission_omr_answers WHERE submission_id=$1').run(submissionId);
   await db.prepare('DELETE FROM evaluations WHERE submission_id = $1').run(submissionId);
   await db.prepare('DELETE FROM grades WHERE submission_id = $1').run(submissionId);
 }
@@ -67,7 +68,10 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
     const config=await getOmrConfig(submission.activity_id);
     if(JSON.stringify(configSchema.parse(body.config))!==JSON.stringify(config)) throw conflict('La configuración ha cambiado: repite la detección y revisión.');
     // Preview only: never change submission status or claim that this is a saved grade.
-    try{return scoreAnswers(body.answers,config);}catch(error){throw badRequest(error instanceof Error?error.message:'Respuestas inválidas');}
+    let result;
+    try{result=scoreAnswers(body.answers,config);}catch(error){throw badRequest(error instanceof Error?error.message:'Respuestas inválidas');}
+    await db.prepare('INSERT INTO submission_omr_answers(submission_id,answers,config,confirmed_at) VALUES($1,$2::jsonb,$3::jsonb,$4) ON CONFLICT(submission_id) DO UPDATE SET answers=EXCLUDED.answers,config=EXCLUDED.config,confirmed_at=EXCLUDED.confirmed_at').run(submissionId,JSON.stringify(body.answers),JSON.stringify(config),nowIso());
+    return result;
   });
 
   app.get('/api/submissions', async (request) => {
@@ -315,6 +319,8 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
   app.post('/api/submissions/:id/reading-check', async (request) => {
     const submissionId = Number((request.params as { id: string }).id);
     const submission = await assertSubmission(submissionId);
+    const omr=await confirmedOmrAnswers(submissionId,submission.activity_id);
+    if(omr)return {text:omr.answers.map(a=>`${a.question}: ${a.answer??'[EN BLANCO]'}`).join('\n'),pages:1,totalPages:1,provider:'Detector de burbujas confirmado',model:omr.config.template.name};
     const activity = await db
       .prepare('SELECT subject FROM activities WHERE id = $1')
       .get<{ subject: string }>(submission.activity_id);

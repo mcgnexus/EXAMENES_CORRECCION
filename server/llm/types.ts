@@ -45,6 +45,8 @@ export interface GradingInput {
   solutionText: string;
   images: ImagePart[];
   seed: number;
+  /** Exclusive student answer source in bubble-sheet mode. Never attach student images. */
+  detectedAnswers?: {question:number;answer:string|null}[];
 }
 
 export interface GradingItemOutput {

@@ -10,6 +10,12 @@ ni entrenamiento de modelos.
 
 ## Recorrido cubierto
 
+### Modo guiado
+
+La pantalla de Actividades incluye «¿Por dónde empezar?». Dentro de cada actividad y entrega, **Modo guiado** muestra el primer paso pendiente y enlaces directos a las secciones o entregas necesarias. El recorrido distingue ejercicios generales y test con detector: clase → enunciado → solución → rúbrica → plantilla/clave confirmada → entregas → respuestas del detector confirmadas → corrección → revisión/aprobación. Los pasos específicos de test solo aparecen al elegir esa guía o guardar una configuración de test.
+
+El progreso deriva de documentos, rúbrica y estados guardados, no de marcar casillas de «hecho». Las confirmaciones del detector solo cuentan si corresponden a la configuración actual. La preferencia de mostrar la guía se recuerda en el navegador. La guía orienta la navegación sin ocultar el resto de herramientas ni sustituir la revisión docente; no verifica por sí misma la exactitud de una solución o de la rúbrica.
+
 ### Hojas de respuestas tipo test
 
 En la actividad, abre **Configurar plantilla, clave y puntuación de test**:
@@ -20,7 +26,7 @@ En la actividad, abre **Configurar plantilla, clave y puntuación de test**:
 4. Selecciona un documento de tipo **solución** ya cargado y extrae una propuesta de clave con IA. Solo se piden respuestas explícitas: las ausentes/ambiguas quedan pendientes. La extracción guarda primero el borrador de configuración con la clave sin confirmar, pero no guarda la propuesta extraída automáticamente. Coteja todas las opciones y la versión del examen, confirma y guarda.
 5. En una entrega, **Detectar burbujas** analiza únicamente la primera página usando la plantilla de la actividad. Corrige todas las filas dudosas y confirma la revisión. **Previsualizar puntuación configurada** usa la clave confirmada guardada; no usa un LLM y no modifica notas, aprobaciones ni exportaciones.
 
-La configuración se conserva en PostgreSQL mediante la migración `002_omr_config`. Cambiar la configuración después de detectar obliga a repetir la detección/revisión antes del cálculo. Se han probado la foto UAX de ejemplo, su reducción, una marca múltiple y una plantilla sintética de cinco opciones; otras fotos/plantillas requieren validación docente. El flujo de corrección general con LLM es independiente: no debe sustituir este cotejo de burbujas.
+La configuración se conserva en PostgreSQL mediante la migración `002_omr_config`. Las respuestas revisadas se guardan mediante **Confirmar respuestas y previsualizar puntuación**, en `submission_omr_answers` (migración `003_omr_answers`). En actividades con configuración de test, la corrección por LLM queda bloqueada hasta esa confirmación y recibe exclusivamente esa lista de opciones/blancos, nunca las imágenes de la entrega. Solo puede recibir imágenes del enunciado o de soluciones de referencia. Compara la lista con las soluciones generadas por los LLM y guardadas en la actividad, y con la clave confirmada extraída de ellas. «Comprobar lectura» también devuelve la lista del detector, sin llamar al LLM. Cambiar la configuración o sustituir archivos exige repetir la revisión. Se han probado la foto UAX de ejemplo, su reducción, una marca múltiple y una plantilla sintética de cinco opciones; otras fotos/plantillas requieren validación docente.
 
 1. **Clase** con ~30 alumnos (alta manual o importación de lista/CSV).
 2. **Actividad** de Biología o Bioquímica con **rúbrica por apartados** y documentos:

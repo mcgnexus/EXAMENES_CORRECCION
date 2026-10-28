@@ -129,8 +129,18 @@ export default function ActivitiesPage() {
 
       <div className="grid two">
         <section className="card">
+          <details open={activities.length===0}>
+            <summary>¿Por dónde empezar?</summary>
+            <ol>
+              <li>Comprueba el modelo y las claves de API en <Link to="/settings">Ajustes</Link> antes de usar la IA.</li>
+              <li>Prepara la clase y los alumnos en <Link to="/classes">Clases y alumnos</Link>.</li>
+              <li><a href="#new-activity">Crea una actividad</a> y asígnale la clase.</li>
+              <li>Abre la actividad y activa <strong>Modo guiado</strong>: la aplicación te indicará el siguiente paso con los datos guardados.</li>
+              <li>Si es tipo test, elige la guía de burbujas: primero solución y clave, después detección confirmada y, por último, corrección.</li>
+            </ol>
+          </details>
           <div className="card-head">
-            <h2>Nueva actividad</h2>
+            <h2 id="new-activity">Nueva actividad</h2>
           </div>
           <div className="stack">
             <div className="row">

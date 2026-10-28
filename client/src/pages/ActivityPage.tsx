@@ -16,6 +16,8 @@ import type {
 import { apiGet, apiSend, apiUpload, errorMessage, fileUrl } from '../api';
 import { expandPdfFiles } from '../pdf';
 import OmrSettings from '../OmrSettings';
+import GuidePanel from '../GuidePanel';
+import {buildActivityGuide} from '../../../shared/workflow';
 
 interface RubricDraft {
   id?: number;
@@ -67,6 +69,19 @@ export default function ActivityPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [workflow,setWorkflow]=useState<{test:boolean;keyConfirmed:boolean;confirmedIds:number[]}|null>(null);
+  const [guideTest,setGuideTest]=useState(false);
+  const [workflowError,setWorkflowError]=useState('');
+  const refreshWorkflow=useCallback(async()=>{
+    try{setWorkflow(await apiGet(`/api/activities/${activityId}/workflow`));setWorkflowError('');}
+    catch(e){setWorkflowError(errorMessage(e));}
+  },[activityId]);
+  useEffect(()=>{
+    setWorkflow(null);try{setGuideTest(localStorage.getItem(`examenes:guide-test:${activityId}`)==='on');}catch{setGuideTest(false);}void refreshWorkflow();
+    const update=()=>void refreshWorkflow();
+    window.addEventListener('app-workflow-updated',update);window.addEventListener('focus',update);
+    return()=>{window.removeEventListener('app-workflow-updated',update);window.removeEventListener('focus',update);};
+  },[refreshWorkflow]);
 
   const [meta, setMeta] = useState({
     title: '',
@@ -380,6 +395,13 @@ export default function ActivityPage() {
         </div>
       )}
 
+      {workflow&&<>
+        {!workflow.test&&<label style={{display:'block',marginBottom:12}}><input type="checkbox" checked={guideTest} onChange={e=>{setGuideTest(e.target.checked);try{localStorage.setItem(`examenes:guide-test:${activityId}`,e.target.checked?'on':'off');}catch{/* optional preference */}}}/> Guiarme para un examen tipo test con detector de burbujas</label>}
+        <GuidePanel steps={buildActivityGuide({hasClass:activity.classId!==null,hasStatement:bundle.documents.some(d=>d.kind==='enunciado'),hasSolution:bundle.documents.some(d=>d.kind==='solucion'),hasRubric:bundle.rubric.length>0,test:workflow.test||guideTest,keyConfirmed:workflow.keyConfirmed,submissions,confirmedIds:workflow.confirmedIds})} onNavigate={href=>{
+          if(href==='#activity-omr'){const el=document.getElementById('activity-omr');if(el instanceof HTMLDetailsElement)el.open=true;}
+        }}/>
+      </>}
+      {workflowError&&<p className="notice">No se pudo comprobar el progreso de la guía: {workflowError} <button className="btn" onClick={()=>void refreshWorkflow()}>Reintentar</button></p>}
       <div className="grid three" style={{ marginBottom: 16 }}>
         <div className="card stat">
           <span className="small muted">Apartados</span>
@@ -398,8 +420,8 @@ export default function ActivityPage() {
         </div>
       </div>
 
-      <details style={{marginBottom:16}}><summary>Configurar plantilla, clave y puntuación de test</summary><OmrSettings activityId={activity.id} documents={bundle.documents}/></details>
-      <section className="card">
+      <details id="activity-omr" style={{marginBottom:16}}><summary>Configurar plantilla, clave y puntuación de test</summary><OmrSettings activityId={activity.id} documents={bundle.documents}/></details>
+      <section className="card" id="activity-meta">
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Datos de la actividad</summary>
           <div className="grid three" style={{ marginTop: 14 }}>
@@ -463,7 +485,7 @@ export default function ActivityPage() {
 
       <section className="card">
         <div className="card-head">
-          <h2>Enunciado, solución y documentación</h2>
+          <h2 id="activity-documents">Enunciado, solución y documentación</h2>
           <span className="badge">{bundle.documents.length}</span>
         </div>
 
@@ -603,7 +625,7 @@ export default function ActivityPage() {
 
       <section className="card">
         <div className="card-head">
-          <h2>Rúbrica por apartados</h2>
+          <h2 id="activity-rubric">Rúbrica por apartados</h2>
           <span className="badge">{rubricTotal.toFixed(1)} puntos</span>
         </div>
 
@@ -688,7 +710,7 @@ export default function ActivityPage() {
 
       <section className="card">
         <div className="card-head">
-          <h2>Entregas de alumnos</h2>
+          <h2 id="activity-submissions">Entregas de alumnos</h2>
           <span className="badge">
             {submissions.length} / {bundle.students.length}
           </span>

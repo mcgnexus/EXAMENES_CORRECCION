@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db,getSettings,nowIso } from '../db';
 import { badRequest,notFound } from '../errors';
-import { configSchema,defaultConfig,questionCount,type OmrConfig } from '../../shared/omr';
+import { configSchema,defaultConfig,questionCount,scoreAnswers,type OmrConfig } from '../../shared/omr';
 import { runProviderRead,runWithModelFailover } from '../llm/providers';
 import { extractJsonObject } from '../llm/prompts';
 import { readFileBase64 } from '../storage';
@@ -12,7 +12,24 @@ export async function getOmrConfig(activityId:number):Promise<OmrConfig>{
   const row=await db.prepare('SELECT config FROM activity_omr_config WHERE activity_id=$1').get<{config:unknown}>(activityId);
   return configSchema.parse(row?.config ?? structuredClone(defaultConfig));
 }
+export async function confirmedOmrAnswers(submissionId:number,activityId:number){
+  const enabled=await db.prepare('SELECT activity_id FROM activity_omr_config WHERE activity_id=$1').get(activityId);
+  if(!enabled)return null;
+  const config=await getOmrConfig(activityId);
+  const row=await db.prepare('SELECT answers,config FROM submission_omr_answers WHERE submission_id=$1').get<{answers:{question:number;answer:string|null}[];config:unknown}>(submissionId);
+  if(!row)throw badRequest('Confirma primero las respuestas del detector de burbujas en la entrega. No se enviará la foto al LLM.');
+  if(JSON.stringify(configSchema.parse(row.config))!==JSON.stringify(config))throw badRequest('La plantilla, clave o puntuación ha cambiado. Repite la detección y confirma las respuestas.');
+  scoreAnswers(row.answers,config);
+  return {answers:row.answers,config};
+}
 export async function registerOmrRoutes(app:FastifyInstance){
+  app.get('/api/activities/:id/workflow',async req=>{
+    const id=Number((req.params as {id:string}).id);
+    if(!await db.prepare('SELECT id FROM activities WHERE id=$1').get(id))throw notFound('Actividad no encontrada');
+    const stored=await db.prepare('SELECT config FROM activity_omr_config WHERE activity_id=$1').get<{config:unknown}>(id);
+    const rows=await db.prepare('SELECT a.submission_id FROM submission_omr_answers a JOIN submissions s ON s.id=a.submission_id JOIN activity_omr_config c ON c.activity_id=s.activity_id WHERE s.activity_id=$1 AND a.config=c.config').all<{submission_id:number}>(id);
+    return {test:!!stored,keyConfirmed:stored?configSchema.parse(stored.config).keyConfirmed:false,confirmedIds:rows.map(r=>r.submission_id)};
+  });
   app.get('/api/activities/:id/omr',async req=>{
     const id=Number((req.params as {id:string}).id);
     if(!await db.prepare('SELECT id FROM activities WHERE id=$1').get(id)) throw notFound('Actividad no encontrada');
