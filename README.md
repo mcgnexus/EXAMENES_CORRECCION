@@ -28,6 +28,11 @@ sube una foto o PDF (lista de alumnos o examen) y el modelo primario configurado
 extrae los nombres, o bien el título, la asignatura, el enunciado y los apartados
 con su puntuación, rellenando el formulario para que lo revises antes de guardar.
 
+En la página de cada actividad, el botón **«🤖 Generar plantilla de respuestas (IA)»**
+responde el enunciado con el modelo primario y lo guarda como documento
+«Solución» — útil cuando no tienes plantilla de respuestas del examen. Si ya
+existe una solución generada, se actualiza en vez de duplicarse.
+
 ## Requisitos
 
 - Node.js 20+ y npm.
