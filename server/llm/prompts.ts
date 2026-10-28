@@ -20,13 +20,17 @@ export function buildSystemPrompt(input: GradingInput): string {
     '- Los puntos deben estar entre 0 y el máximo del apartado, con un decimal (0.1).',
     '- Comentarios breves (1-3 frases), concretos y en español, citando la evidencia del examen.',
     '- No penalices dos veces el mismo error dentro del mismo apartado.',
-    '- Si no hay evidencia suficiente para un apartado, puntúa 0 e indícalo como no respondido.',
+    '- Antes de puntuar, recorre visualmente TODAS las páginas adjuntas de la entrega y localiza cada pregunta de la rúbrica.',
+    '- Para CADA apartado distingue explícitamente: RESPONDIDO, EN BLANCO (la pregunta se ve y no hay respuesta) o NO LOCALIZABLE (no puedes encontrar la pregunta en las páginas recibidas).',
+    '- EN BLANCO recibe 0 puntos y el comentario debe comenzar por "EN BLANCO". No confundas una hoja/página en blanco con una pregunta no localizada.',
+    '- Si un apartado no aparece en las páginas de la entrega, no afirmes que está en blanco: indícalo como "NO LOCALIZABLE" y puntúa 0 provisionalmente.',
+    '- No omitas ningún apartado aunque esté en blanco, no localizado o ilegible; aporta una línea por apartado en reading.',
     '',
     'Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional ni bloques de código, con esta forma:',
-    '{"reading":"<transcripción estructurada de lo que ves en el examen: por apartado, texto, cálculos, tablas y dibujos>",',
+    '{"reading":"<transcripción estructurada: por cada apartado, estado RESPONDIDO/EN BLANCO/NO LOCALIZABLE y evidencia visible>",',
     ' "items":[{"itemId":<id numérico de la rúbrica>,"points":<número>,"comment":"<comentario>","confidence":<0..1>}],',
     ' "overallComment":"<comentario global breve del examen>"}',
-    'Incluye exactamente un objeto items por cada apartado de la rúbrica, usando sus ids.',
+    'Incluye exactamente un objeto items por cada apartado de la rúbrica, usando sus ids; incluye el estado en cada comentario.',
   ].join('\n');
 }
 
@@ -57,6 +61,7 @@ export function buildUserPrompt(input: GradingInput): string {
       '',
       'Las imágenes adjuntas, en orden, son:',
       ...input.images.map((image, index) => `${index + 1}. ${image.label}`),
+      'Si una etiqueta indica que faltan páginas, limita tus conclusiones a las páginas recibidas: marca como NO LOCALIZABLE cualquier apartado que pudiera estar en las páginas no adjuntas; nunca lo declares EN BLANCO.',
     );
   } else {
     parts.push('', 'No se adjuntan imágenes; evalúa solo con el texto disponible.');
@@ -144,6 +149,8 @@ export function buildSolveSystemPrompt(subject: string): string {
     'Reglas:',
     '- Responde CADA apartado del examen, en el mismo orden, con un encabezado por',
     '  apartado (## Apartado N · título).',
+    '- Recorre todas las páginas adjuntas antes de redactar y coteja la solución con cada pregunta visible; no omitas apartados aunque estén repetidos, tengan varios incisos o continúen en otra página.',
+    '- Si un enunciado o dato no se puede leer, no lo inventes: señala la duda bajo el apartado correspondiente y explica la interpretación asumida.',
     '- Desarrollo completo y riguroso: definiciones, procesos, fórmulas, ejemplos y',
     '  esquemas en texto, con el razonamiento esperado en una respuesta perfecta.',
     '- En exámenes prácticos, muestra el procedimiento paso a paso y el resultado final.',

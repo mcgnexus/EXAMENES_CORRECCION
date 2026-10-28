@@ -112,27 +112,39 @@ async function buildGradingInput(
     .join('\n\n');
 
   const { readFileBase64 } = await import('../storage');
-  const maxPages = Math.max(1, settings.maxPagesPerEvaluation);
+  const maxPagesPerDocument = Math.max(1, settings.maxPagesPerEvaluation);
 
   let images: ImagePart[] = [];
   if (settings.includeImages) {
-    images = await toImageParts(studentPages.slice(0, maxPages), 'RESPUESTA DEL ALUMNO', readFileBase64);
-    const remaining = Math.max(0, maxPages - images.length);
+    // Cada fuente tiene su propio presupuesto: la entrega larga no debe
+    // consumir el espacio del enunciado y ocultar preguntas al modelo.
+    images = await toImageParts(
+      studentPages.slice(0, maxPagesPerDocument),
+      `RESPUESTA DEL ALUMNO (primeras ${Math.min(studentPages.length, maxPagesPerDocument)} de ${studentPages.length} páginas)`,
+      readFileBase64,
+    );
     const solutionDocs = documents.filter((doc) => doc.kind === 'solucion');
     const solutionPages: FileDbRow[] = [];
     for (const doc of solutionDocs) solutionPages.push(...(await pageFiles('document', doc.id)));
-    if (remaining > 0 && solutionPages.length > 0) {
+    if (solutionPages.length > 0) {
       images = images.concat(
-        await toImageParts(solutionPages.slice(0, remaining), 'SOLUCIÓN DE REFERENCIA', readFileBase64),
+        await toImageParts(
+          solutionPages.slice(0, maxPagesPerDocument),
+          `SOLUCIÓN DE REFERENCIA (primeras ${Math.min(solutionPages.length, maxPagesPerDocument)} de ${solutionPages.length} páginas)`,
+          readFileBase64,
+        ),
       );
     }
-    const remaining2 = Math.max(0, maxPages - images.length);
     const enunciadoDocs = documents.filter((doc) => doc.kind === 'enunciado');
     const enunciadoPages: FileDbRow[] = [];
     for (const doc of enunciadoDocs) enunciadoPages.push(...(await pageFiles('document', doc.id)));
-    if (remaining2 > 0 && enunciadoPages.length > 0) {
+    if (enunciadoPages.length > 0) {
       images = images.concat(
-        await toImageParts(enunciadoPages.slice(0, remaining2), 'ENUNCIADO', readFileBase64),
+        await toImageParts(
+          enunciadoPages.slice(0, maxPagesPerDocument),
+          `ENUNCIADO (primeras ${Math.min(enunciadoPages.length, maxPagesPerDocument)} de ${enunciadoPages.length} páginas)`,
+          readFileBase64,
+        ),
       );
     }
   }

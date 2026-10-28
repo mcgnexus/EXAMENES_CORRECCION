@@ -261,7 +261,7 @@ export default function SettingsPage() {
             />
           </label>
           <label className="field">
-            Máx. páginas enviadas por evaluación
+            Máx. páginas por documento enviadas a cada modelo
             <input
               type="number"
               min={1}
