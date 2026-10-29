@@ -36,12 +36,12 @@ export default function OmrSettings({activityId,documents}:{activityId:number;do
   async function extract(){
     setBusy(true);setMessage('');
     try{
-      // Extraction uses exactly the template visible in the editor.
+      // La clave se genera con la plantilla visible en el editor y solo con texto: el LLM responde el examen, sin ver imágenes.
       await apiSend(`/api/activities/${activityId}/omr`,'PUT',configSchema.parse({...config,keyConfirmed:false}));
       window.dispatchEvent(new Event('app-workflow-updated'));
-      const r=await apiSend<{key:Record<string,string>;warnings:string[]}>(`/api/activities/${activityId}/omr/extract-key`,'POST',{documentId:Number(documentId)});
+      const r=await apiSend<{key:Record<string,string>;warnings:string[]}>(`/api/activities/${activityId}/omr/solve-key`,'POST',documentId?{documentId:Number(documentId)}:{});
       setConfig(c=>({...c,key:r.key,keyConfirmed:false}));
-      setMessage(`Propuesta extraída, aún sin confirmar ni guardar. ${r.warnings.join(' ')}`);
+      setMessage(`Propuesta generada por IA (el LLM ha respondido el test), aún sin confirmar ni guardar. ${r.warnings.join(' ')}`);
     }catch(e){setMessage(errorMessage(e));}finally{setBusy(false);}
   }
   const labels=['cuadrado superior izquierdo','cuadrado superior derecho','cuadrado inferior izquierdo','cuadrado inferior derecho','primera opción de la primera fila del bloque','última opción de la primera fila del bloque','primera opción de la última fila del bloque'];
@@ -92,10 +92,10 @@ export default function OmrSettings({activityId,documents}:{activityId:number;do
       <h3 style={{marginTop:18}}>Puntuación de esta actividad</h3>
       <div className="row">{(['correct','wrong','blank','scale'] as const).map((field,i)=><label className="field" key={field}>{['Acierto','Error (negativo o cero)','En blanco','Escala final'][i]}<input type="number" step="0.01" value={config.scoring[field]} onChange={e=>change({...config,scoring:{...config.scoring,[field]:Number(e.target.value)}})}/></label>)}</div>
       <label><input type="checkbox" checked={config.scoring.floorAtZero} onChange={e=>change({...config,scoring:{...config.scoring,floorAtZero:e.target.checked}})}/> No permitir nota final negativa</label>
-      <h3 style={{marginTop:18}}>Clave desde documento de soluciones</h3>
-      <select aria-label="Documento de soluciones" value={documentId} onChange={e=>setDocumentId(e.target.value)}><option value="">Selecciona documento</option>{documents.filter(d=>d.kind==='solucion').map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select>
-      <button className="btn" disabled={!documentId} onClick={()=>void extract()}>Extraer propuesta con IA</button>
-      <p className="small muted">La IA solo extrae soluciones explícitas: no resuelve ni completa preguntas. Revisa la versión del examen y corrige la propuesta.</p>
+      <h3 style={{marginTop:18}}>Clave generada con IA (opcional)</h3>
+      <select aria-label="Documento de soluciones (contexto opcional)" value={documentId} onChange={e=>setDocumentId(e.target.value)}><option value="">Sin contexto adicional</option>{documents.filter(d=>d.kind==='solucion').map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select>
+      <button className="btn" onClick={()=>void extract()}>Generar clave con IA</button>
+      <p className="small muted">El LLM responde el test a partir del texto del enunciado de la actividad (sin ver imágenes); las marcas del alumno se detectan solo con el detector de burbujas. El documento de soluciones puede usarse como contexto de texto opcional. Revisa y corrige la propuesta antes de confirmar.</p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(95px,1fr))',gap:8}}>
         {Array.from({length:Math.min(200,questionCount(config.template))},(_,i)=>i+1).map(q=><label className="field" key={q}>{q}<select value={config.key[q]??''} onChange={e=>{const key={...config.key};if(e.target.value)key[q]=e.target.value;else delete key[q];change({...config,key,keyConfirmed:false});}}><option value="">Sin clave</option>{[...config.template.options].map(a=><option key={a}>{a}</option>)}</select></label>)}
       </div>

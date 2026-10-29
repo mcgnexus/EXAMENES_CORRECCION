@@ -1,64 +1,90 @@
 import sharp from 'sharp';
-import { defaultTemplate, templateSchema, type OmrTemplate } from '../shared/omr';
+import {createRequire} from 'node:module';
+const cvModule=createRequire(import.meta.url)('@techstark/opencv-js') as Promise<typeof import('@techstark/opencv-js')>;
+import {defaultTemplate,templateSchema,type OmrTemplate} from '../shared/omr';
 
 export interface BubbleDetection {
-  question: number;
-  answer: string | null;
-  confidence: number;
-  state: 'marked' | 'blank' | 'ambiguous';
-  scores: number[];
+  question:number;answer:string|null;confidence:number;
+  state:'marked'|'blank'|'ambiguous';scores:number[];reason?:string;
+  circles?:{x:number;y:number;radius:number;located:boolean}[];
 }
-type Point = { x: number; y: number };
-
-/** Regular grids anchored to four solid registration squares; fail closed if ambiguous. */
-export async function detectAnswerSheet(buffer: Buffer, template:OmrTemplate=defaultTemplate): Promise<BubbleDetection[]> {
+/** OpenCV WASM runs server-side; student images are never sent to an LLM. */
+export async function detectAnswerSheet(buffer:Buffer,template:OmrTemplate=defaultTemplate):Promise<BubbleDetection[]>{
   template=templateSchema.parse(template);
-  const { data, info } = await sharp(buffer).rotate().resize({ width: 1600, withoutEnlargement: true }).greyscale().normalize().raw().toBuffer({ resolveWithObject: true });
-  const { width: w, height: h } = info;
-  const visited = new Uint8Array(w * h);
-  const squares: Point[] = [];
-  for (let y = Math.floor(h * .01); y < h * .99; y++) for (let x = Math.floor(w * .01); x < w * .99; x++) {
-    const start = y * w + x;
-    if (visited[start] || data[start] > 65) continue;
-    const stack = [start]; visited[start] = 1;
-    let count = 0, minX = x, maxX = x, minY = y, maxY = y;
-    while (stack.length) {
-      const p = stack.pop()!; const yy = Math.floor(p / w), xx = p % w;
-      count++; minX = Math.min(minX, xx); maxX = Math.max(maxX, xx); minY = Math.min(minY, yy); maxY = Math.max(maxY, yy);
-      for (const n of [xx > 0 ? p - 1 : -1, xx < w - 1 ? p + 1 : -1, p - w, p + w]) {
-        if (n < 0 || n >= data.length || visited[n] || data[n] > 65) continue;
-        visited[n] = 1; stack.push(n);
+  const cv=await cvModule;
+  const {data,info}=await sharp(buffer).rotate().resize({width:1800,withoutEnlargement:true}).removeAlpha().greyscale().raw().toBuffer({resolveWithObject:true});
+  const w=info.width,h=info.height;
+  if(w<700||h<700)throw new Error('Resolución insuficiente: fotografía la hoja completa con mayor nitidez.');
+  const allocated:{delete:()=>void}[]=[];
+  const keep=<T extends {delete:()=>void}>(v:T):T=>{allocated.push(v);return v;};
+  try{
+    const src=keep(cv.matFromArray(h,w,cv.CV_8UC1,data));
+    const binary=keep(new cv.Mat()),contours=keep(new cv.MatVector()),hierarchy=keep(new cv.Mat());
+    cv.threshold(src,binary,0,255,cv.THRESH_BINARY_INV|cv.THRESH_OTSU);
+    cv.findContours(binary,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    const markers:{x:number;y:number}[]=[];
+    for(let i=0;i<contours.size();i++){
+      const c=contours.get(i);
+      try{const r=cv.boundingRect(c),area=cv.contourArea(c),polygon=new cv.Mat();
+        try{cv.approxPolyDP(c,polygon,cv.arcLength(c,true)*.035,true);
+        if(polygon.rows===4&&r.width>w*.008&&r.width<w*.03&&r.height>h*.004&&r.height<h*.025&&r.width/r.height>.65&&r.width/r.height<1.5&&area/(r.width*r.height)>.70)markers.push({x:r.x+r.width/2,y:r.y+r.height/2});
+        }finally{polygon.delete();}
+      }finally{c.delete();}
+    }
+    if(markers.length!==4)throw new Error(`Plantilla no reconocida: ${markers.length} referencias localizadas en lugar de cuatro. Repite la foto o revisa la plantilla.`);
+    markers.sort((a,b)=>a.y-b.y);
+    const [tl,tr]=markers.slice(0,2).sort((a,b)=>a.x-b.x),[bl,br]=markers.slice(2).sort((a,b)=>a.x-b.x);
+    if(tr.x-tl.x<w*.4||bl.y-tl.y<h*.2)throw new Error('Disposición de referencias inválida.');
+    const from=keep(cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,bl.x,bl.y,br.x,br.y]));
+    const to=keep(cv.matFromArray(4,1,cv.CV_32FC2,[0,0,1000,0,0,1000,1000,1000]));
+    const transform=keep(cv.getPerspectiveTransform(from,to)),inverse=keep(cv.getPerspectiveTransform(to,from));
+    const rectified=keep(new cv.Mat());
+    cv.warpPerspective(src,rectified,transform,new cv.Size(1000,1000),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255));
+    const laplacian=keep(new cv.Mat()),mean=keep(new cv.Mat()),deviation=keep(new cv.Mat());
+    cv.Laplacian(rectified,laplacian,cv.CV_64F);
+    cv.meanStdDev(laplacian,mean,deviation);
+    if(deviation.data64F[0]**2<5)throw new Error('La zona de respuestas está desenfocada: repite la fotografía.');
+    const adaptive=keep(new cv.Mat()),global=keep(new cv.Mat());
+    cv.adaptiveThreshold(rectified,adaptive,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY_INV,81,7);
+    cv.threshold(rectified,global,0,255,cv.THRESH_BINARY_INV|cv.THRESH_OTSU);
+    const rings=keep(new cv.MatVector()),rh=keep(new cv.Mat());
+    cv.findContours(global,rings,rh,cv.RETR_LIST,cv.CHAIN_APPROX_SIMPLE);
+    const candidates:{x:number;y:number;r:number}[]=[];
+    for(let i=0;i<rings.size();i++){
+      const c=rings.get(i);
+      try{
+        const b=cv.boundingRect(c),area=cv.contourArea(c),perimeter=cv.arcLength(c,true);
+        if(b.width>=10&&b.width<=45&&b.height>=10&&b.height<=45&&b.width/b.height>.6&&b.width/b.height<1.65&&perimeter>0&&4*Math.PI*area/(perimeter*perimeter)>.55)candidates.push({x:b.x+b.width/2,y:b.y+b.height/2,r:Math.min(b.width,b.height)/2});
+      }finally{c.delete();}
+    }
+    const fill=(image:typeof global,x:number,y:number,r:number)=>{
+      let n=0,ink=0;
+      for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++)if(dx*dx+dy*dy<=r*r){
+        const xx=Math.round(x+dx),yy=Math.round(y+dy);
+        if(xx<0||xx>=1000||yy<0||yy>=1000)throw new Error('Burbuja fuera de la zona rectificada.');
+        n++;if(image.data[yy*1000+xx])ink++;
       }
-    }
-    const bw = maxX - minX + 1, bh = maxY - minY + 1;
-    if (bw > w * .008 && bw < w * .025 && bh > h * .004 && bh < h * .02 && bw / bh > .65 && bw / bh < 1.5 && count / (bw * bh) > .90) {
-      squares.push({ x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
-    }
-  }
-  if (squares.length !== 4) throw new Error(`Plantilla no reconocida: se localizaron ${squares.length} marcas de referencia, se necesitan exactamente cuatro. Usa una foto completa y nítida.`);
-  squares.sort((a,b) => a.y - b.y);
-  const [tl,tr] = squares.slice(0,2).sort((a,b) => a.x-b.x);
-  const [bl,br] = squares.slice(2).sort((a,b) => a.x-b.x);
-  if (tr.x - tl.x < w * .4 || bl.y - tl.y < h * .2) throw new Error('Las marcas no forman una hoja válida.');
-  const at = (u:number,v:number):Point => ({
-    x:(1-v)*((1-u)*tl.x+u*tr.x)+v*((1-u)*bl.x+u*br.x),
-    y:(1-v)*((1-u)*tl.y+u*tr.y)+v*((1-u)*bl.y+u*br.y),
-  });
-  const radius = Math.max(2, Math.round((tr.x-tl.x)*template.radius));
-  const fill = (p:Point) => {
-    let dark=0,total=0;
-    for(let dy=-radius;dy<=radius;dy++) for(let dx=-radius;dx<=radius;dx++) {
-      if(dx*dx+dy*dy>radius*radius) continue;
-      const x=Math.round(p.x)+dx,y=Math.round(p.y)+dy;
-      if(x<0||x>=w||y<0||y>=h) throw new Error('Burbujas fuera de la imagen.');
-      total++; if(data[y*w+x]<110) dark++;
-    }
-    return dark/total;
-  };
-  return template.blocks.flatMap(block=>Array.from({length:block.rows},(_,row) => {
-    const scores=[...template.options].map((_,col) => fill(at(block.x+col*block.dx, block.y+row*block.dy)));
-    const sorted=[...scores].sort((a,b)=>b-a), max=sorted[0];
-    const state:BubbleDetection['state']=max<.15?'blank':max>=.45&&sorted[1]<.15?'marked':'ambiguous';
-    return { question:block.first+row, answer:state==='marked'?template.options[scores.indexOf(max)]:null, state, scores, confidence:state==='ambiguous'?0:state==='blank'?1-max:max-sorted[1] };
-  }));
+      return ink/n;
+    };
+    const back=(x:number,y:number)=>{const m=inverse.data64F,d=m[6]*x+m[7]*y+m[8];return {x:(m[0]*x+m[1]*y+m[2])/d/w,y:(m[3]*x+m[4]*y+m[5])/d/h};};
+    const used=new Set<number>();
+    return template.blocks.flatMap(b=>Array.from({length:b.rows},(_,row)=>{
+      let missing=false,disagreement=false;
+      const circles=[...template.options].map((_,col)=>{
+        const x=(b.x+col*b.dx)*1000,y=(b.y+row*b.dy)*1000;
+        const nearest=candidates.map((c,index)=>({...c,index,d:Math.hypot(c.x-x,c.y-y)})).filter(c=>c.d<12).sort((a,b)=>a.d-b.d)[0];
+        const located=!!nearest&&!used.has(nearest.index);
+        if(!located)missing=true;else used.add(nearest.index);
+        const c=nearest??{x,y,r:template.radius*3000};
+        const radius=Math.max(2,Math.floor(Math.min(c.r*.5,template.radius*1000)));
+        const score=located?fill(adaptive,c.x,c.y,radius):0;
+        const other=located?fill(global,c.x,c.y,radius):0;
+        if((score<.15)!==(other<.15)||(score>.5)!==(other>.5))disagreement=true;
+        return {...back(c.x,c.y),radius:c.r/1000*(tr.x-tl.x)/w,located,score};
+      });
+      const scores=circles.map(c=>c.score),sorted=[...scores].sort((a,b)=>b-a);
+      const state:BubbleDetection['state']=missing||disagreement?'ambiguous':sorted[0]<.15?'blank':sorted[0]>.5&&sorted[1]<.15?'marked':'ambiguous';
+      return {question:b.first+row,answer:state==='marked'?template.options[scores.indexOf(sorted[0])]:null,state,scores,confidence:state==='ambiguous'?0:Math.max(0,sorted[0]-sorted[1]),circles,reason:missing?'Fallo de localización de círculos: recalibra o repite la foto.':state==='ambiguous'?'Marca múltiple, tenue o mediciones contradictorias.':undefined};
+    }));
+  }finally{for(const m of allocated.reverse())m.delete();}
 }

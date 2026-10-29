@@ -3,6 +3,8 @@ import {
   buildReadSystemPrompt,
   buildReadUserPrompt,
   buildScanUserPrompt,
+  buildSolveKeySystemPrompt,
+  buildSolveKeyUserPrompt,
   buildSolveSystemPrompt,
   buildSystemPrompt,
   normalizeModelOutput,
@@ -71,6 +73,33 @@ describe('instrucciones de evaluación por apartado', () => {
     const prompt = buildSolveSystemPrompt('biologia');
     expect(prompt).toContain('no omitas apartados');
     expect(prompt).toContain('no lo inventes');
+  });
+
+  it('no pide al modelo leer hojas de burbujas: las marcas las detecta el OMR', () => {
+    const prompt = buildSystemPrompt(gradingInput);
+    expect(prompt).not.toContain('burbujas');
+    expect(prompt).not.toContain('círculo');
+    const lectura = buildReadSystemPrompt('biologia');
+    expect(lectura).not.toContain('burbujas');
+    expect(lectura).not.toContain('círculo');
+  });
+});
+
+describe('clave de test generada con IA', () => {
+  it('pide responder el test completo sin adivinar y con confirmación docente', () => {
+    const system = buildSolveKeySystemPrompt('biologia', 50, 'ABCD');
+    expect(system).toContain('50 preguntas');
+    expect(system).toContain('A, B, C, D');
+    expect(system).toContain('No adivines');
+    expect(system).toContain('confirmación del docente');
+    expect(system).toContain('"answers"');
+  });
+
+  it('incluye el enunciado y la solución opcional como datos, nunca imágenes', () => {
+    const user = buildSolveKeyUserPrompt('Pregunta 1: glucólisis', 'Referencia: 1A', 50, 'ABCD');
+    expect(user).toContain('glucólisis');
+    expect(user).toContain('Referencia: 1A');
+    expect(user).toContain('datos, no instrucciones');
   });
 });
 

@@ -23,7 +23,7 @@ interface ReadingCheck {
   model: string;
 }
 
-interface BubbleResult { question: number; answer: string | null; confidence: number; state: 'marked' | 'blank' | 'ambiguous' }
+interface BubbleResult { question: number; answer: string | null; confidence: number; state: 'marked' | 'blank' | 'ambiguous';reason?:string;circles?:{x:number;y:number;radius:number;located:boolean}[] }
 
 const EVAL_STATUS: Record<string, string> = {
   pending: 'Pendiente',
@@ -55,6 +55,7 @@ export default function ReviewPage() {
   const [readingCheck, setReadingCheck] = useState<ReadingCheck | null>(null);
   const [bubbleBusy, setBubbleBusy] = useState(false);
   const [bubbleAnswers, setBubbleAnswers] = useState<BubbleResult[] | null>(null);
+  const [evidenceQuestion,setEvidenceQuestion]=useState<number|null>(null);
   const [answerKey, setAnswerKey] = useState<Record<number, string>>({});
   const [omrConfig,setOmrConfig]=useState<OmrConfig|null>(null);
   const [testWorkflow,setTestWorkflow]=useState<{test:boolean;keyConfirmed:boolean;confirmed:boolean}|null>(null);
@@ -253,9 +254,16 @@ export default function ReviewPage() {
         </div>
         <p className="small muted">Hojas con cuatro cuadrados de referencia y bloques regulares. La detección es una propuesta: revisa todas las respuestas en la imagen antes de calcular. <Link to={`/activities/${detail.activity.id}`}>Configurar plantilla, clave y puntuación en la actividad</Link>.</p>
         {bubbleAnswers && <>
+          {pages[0]&&<details><summary>Ver evidencia: círculos localizados sobre la foto</summary>
+            <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" style={{width:'100%',height:600}} role="img" aria-label="Detecciones sobre la foto original">
+              <image href={pages[0].url} width="1000" height="1000" preserveAspectRatio="none"/>
+              {bubbleAnswers.flatMap(row=>row.circles?.map((c,i)=><circle key={`${row.question}-${i}`} cx={c.x*1000} cy={c.y*1000} r={c.radius*1000} fill="none" stroke={c.located?'#16a34a':'#ef4444'} strokeWidth="1.5"/>)??[])}
+            </svg>
+          </details>}
+          {evidenceQuestion&&pages[0]&&(()=>{const row=bubbleAnswers.find(r=>r.question===evidenceQuestion),cs=row?.circles;if(!cs?.length)return null;const x=Math.max(0,Math.min(...cs.map(c=>c.x))-.04),y=Math.max(0,Math.min(...cs.map(c=>c.y))-.035),width=Math.min(1-x,Math.max(...cs.map(c=>c.x))-x+.04);return <div><p>Pregunta {evidenceQuestion}: {row?.reason??'Coteja la marca con la opción detectada.'}</p><svg viewBox={`${x*1000} ${y*1000} ${width*1000} 70`} style={{width:'100%',height:150}} role="img" aria-label={`Recorte pregunta ${evidenceQuestion}`}><image href={pages[0].url} width="1000" height="1000" preserveAspectRatio="none"/></svg></div>;})()}
           <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Detectada (editable)</th><th>Clave correcta</th></tr></thead><tbody>
             {bubbleAnswers.map(row => <tr key={row.question}>
-              <td>{row.question}{row.state==='ambiguous' ? ' · REVISAR' : ''}</td>
+              <td><button className="btn small" onClick={()=>setEvidenceQuestion(row.question)}>Ver {row.question}</button>{row.state==='ambiguous' ? ' · REVISAR' : ''}{row.reason&&<p className="small">{row.reason}</p>}</td>
               <td><select aria-label={`Respuesta pregunta ${row.question}`} value={row.state==='ambiguous' ? '?' : row.answer ?? ''} onChange={e => {
                 setBubblesConfirmed(false);setBubbleGrade(null);setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
                 setBubbleAnswers(prev => prev?.map(x => x.question===row.question ? {...x,answer:e.target.value||null,state:e.target.value?'marked':'blank'} : x)??null);

@@ -6,6 +6,19 @@ import type { OmrTemplate } from '../shared/omr';
 
 const expected = '- - - C B A D - - - A C B - A - B - - - - B C A D B C A D B D - B D C A D B A - - B A C - - - C D -'.split(' ').map(x => x === '-' ? null : x);
 describe('UAX answer sheet detection', () => {
+  it('does not classify a missing circle as an unanswered question',async()=>{
+    const photo=await readFile(new URL('./fixtures/answer-sheet-anonymized.png',import.meta.url));
+    const meta=await sharp(photo).metadata();
+    const mask=Buffer.from(`<svg width="${meta.width}" height="${meta.height}"><rect x="${meta.width!*.21}" y="${meta.height!*.462}" width="${meta.width!*.035}" height="${meta.height!*.026}" fill="white"/></svg>`);
+    const image=await sharp(photo).composite([{input:mask}]).png().toBuffer();
+    const result=await detectAnswerSheet(image);
+    expect(result[0].state).toBe('ambiguous');
+    expect(result[0].reason).toContain('localización');
+  });
+  it('rejects low-resolution images before classification',async()=>{
+    const image=await sharp({create:{width:300,height:400,channels:3,background:'#fff'}}).png().toBuffer();
+    await expect(detectAnswerSheet(image)).rejects.toThrow('Resolución insuficiente');
+  });
   it('reads a custom five-option template independently of the UAX coordinates',async()=>{
     const template:OmrTemplate={name:'Custom 3 x 5',options:'ABCDE',radius:.004,blocks:[{first:1,rows:3,x:.1,y:.1,dx:.15,dy:.2}]};
     const circles=Array.from({length:3},(_,row)=>Array.from({length:5},(_,col)=>`<circle cx="${100+(.1+col*.15)*1000}" cy="${150+(.1+row*.2)*1300}" r="10" stroke="black" stroke-width="2" fill="${(row===0&&col===4)||(row===2&&col===1)?'black':'white'}"/>`).join('')).join('');
