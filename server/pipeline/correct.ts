@@ -1,11 +1,15 @@
 import type { AppSettings, RubricItem, Subject } from '../../shared/types';
+import { z } from 'zod';
 import { db, getSettings, nowIso } from '../db';
 import { emitEvent } from '../events';
-import { runProviderEvaluation, runWithModelFailover } from '../llm/providers';
+import { extractJsonObject } from '../llm/prompts';
+import { buildOmrCommentSystemPrompt, buildOmrCommentUserPrompt } from '../llm/prompts';
+import { runProviderEvaluation, runProviderRead, runWithModelFailover } from '../llm/providers';
 import type { GradingInput, ImagePart } from '../llm/types';
 import { listRubric } from '../mappers';
 import { proposeGrade, round1, type EvaluationLike, type ScoreLike } from './aggregate';
 import { confirmedOmrAnswers } from '../routes/omr';
+import { scoreAnswers, type OmrConfig } from '../../shared/omr';
 
 interface SubmissionDbRow {
   id: number;
@@ -281,6 +285,113 @@ async function writeProposedGrade(
   }
 }
 
+interface OmrData { answers: { question: number; answer: string | null }[]; config: OmrConfig }
+
+/**
+ * Corrección determinista para entregas de test: la nota SIEMPRE sale de las
+ * reglas de puntuación guardadas (scoreAnswers) sobre las respuestas
+ * confirmadas del detector; el LLM solo redacta lectura y comentarios y no
+ * puede cambiar ningún punto.
+ */
+async function correctOmrSubmission(
+  submissionId: number,
+  activityId: number,
+  subject: string,
+  omr: OmrData,
+): Promise<void> {
+  const score = scoreAnswers(omr.answers, omr.config);
+  const settings = await getSettings();
+  const created = await db
+    .prepare(
+      `INSERT INTO evaluations (submission_id, role, provider, model, status, started_at, created_at)
+       VALUES ($1, 'primary', $2, $3, 'running', $4, $5) RETURNING id`,
+    )
+    .get<{ id: number }>(submissionId, settings.primary.provider, settings.primary.model, nowIso(), nowIso());
+  const evaluationId = created?.id ?? 0;
+  let commentary: { reading: string; overallComment: string };
+  try {
+    const result = await runWithModelFailover(
+      settings.primary,
+      settings.independent,
+      (provider, model) =>
+        runProviderRead(provider, model, {
+          subject: subject as 'biologia' | 'bioquimica',
+          images: [],
+          instructions: buildOmrCommentSystemPrompt(subject),
+          context: buildOmrCommentUserPrompt(omr.config.key, omr.answers, score),
+        }),
+    );
+    const parsed = z
+      .object({
+        reading: z.string().default(''),
+        overallComment: z.string().default(''),
+        questionComments: z
+          .array(z.object({ question: z.number(), comment: z.string() }))
+          .default([]),
+      })
+      .parse(extractJsonObject(result.text));
+    commentary = { reading: parsed.reading, overallComment: parsed.overallComment };
+    await db
+      .prepare(
+        `UPDATE evaluations SET status = 'done', reading = $1, overall_comment = $2,
+         total_points = $3, finished_at = $4 WHERE id = $5`,
+      )
+      .run(parsed.reading, parsed.overallComment, score.total, nowIso(), evaluationId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db
+      .prepare("UPDATE evaluations SET status = 'error', error = $1, finished_at = $2 WHERE id = $3")
+      .run(message.slice(0, 2000), nowIso(), evaluationId);
+    throw error;
+  }
+
+  // Nota determinista repartida proporcionalmente entre los apartados de la
+  // rúbrica según sus máximos; el último apartado absorbe el redondeo.
+  // Una nota ya aprobada o exportada no se toca.
+  const approved = await db
+    .prepare('SELECT status FROM grades WHERE submission_id = $1')
+    .get<{ status: string }>(submissionId);
+  if (approved && (approved.status === 'approved' || approved.status === 'exported')) {
+    return;
+  }
+  const rubric = await listRubric(activityId);
+  if (rubric.length === 0) throw new Error('La actividad no tiene apartados en la rúbrica');
+  const maxSum = rubric.reduce((sum, item) => sum + item.maxPoints, 0) || 1;
+  let assigned = 0;
+  const distributed = rubric.map((item, index) => {
+    if (index === rubric.length - 1) {
+      const points = round1(Math.max(0, Math.min(item.maxPoints, score.total - assigned)));
+      assigned = round1(assigned + points);
+      return { item, points };
+    }
+    const points = round1(Math.min(item.maxPoints, (score.total * item.maxPoints) / maxSum));
+    assigned = round1(assigned + points);
+    return { item, points };
+  });
+
+  await db
+    .prepare(
+      `INSERT INTO grades (submission_id, total, overall_comment, status, updated_at)
+       VALUES ($1, $2, $3, 'draft', $4)
+       ON CONFLICT(submission_id) DO UPDATE SET total = EXCLUDED.total,
+         overall_comment = EXCLUDED.overall_comment, updated_at = EXCLUDED.updated_at`,
+    )
+    .run(submissionId, score.total, commentary.overallComment, nowIso());
+  await db.prepare('DELETE FROM grade_items WHERE submission_id = $1').run(submissionId);
+  const insert = db.prepare(
+    `INSERT INTO grade_items (submission_id, rubric_item_id, points, comment, source)
+     VALUES ($1, $2, $3, $4, 'omr')`,
+  );
+  for (const { item, points } of distributed) {
+    await insert.run(
+      submissionId,
+      item.id,
+      points,
+      `Corrección determinista del test (${score.total} / ${score.scale}). ${commentary.overallComment}`.trim(),
+    );
+  }
+}
+
 export async function correctSubmission(submissionId: number): Promise<void> {
   const settings = await getSettings();
   const submission = await db
@@ -294,6 +405,22 @@ export async function correctSubmission(submissionId: number): Promise<void> {
   emitEvent({ type: 'submission', submissionId, status: 'running' });
 
   try {
+    // Entregas de test confirmadas: corrección determinista (la nota sale de
+    // las reglas de puntuación; el LLM solo comenta y nunca ve la foto).
+    const omr = await confirmedOmrAnswers(submissionId, submission.activity_id);
+    if (omr) {
+      const activity = await db
+        .prepare('SELECT id, subject FROM activities WHERE id = $1')
+        .get<{ id: number; subject: string }>(submission.activity_id);
+      if (!activity) throw new Error('Actividad no encontrada');
+      await correctOmrSubmission(submissionId, activity.id, activity.subject, omr);
+      await db
+        .prepare('UPDATE submissions SET status = $1, error = NULL WHERE id = $2')
+        .run('reviewed', submissionId);
+      emitEvent({ type: 'submission', submissionId, status: 'reviewed' });
+      return;
+    }
+
     const input = await buildGradingInput(submissionId, settings);
 
     // Las 3 evaluaciones son independientes entre sí: se lanzan en paralelo.

@@ -16,6 +16,7 @@ import type {
 import { apiGet, apiSend, apiUpload, errorMessage, fileUrl } from '../api';
 import { expandPdfFiles } from '../pdf';
 import OmrSettings from '../OmrSettings';
+import ImageRetouch from '../ImageRetouch';
 import GuidePanel from '../GuidePanel';
 import {buildActivityGuide} from '../../../shared/workflow';
 
@@ -101,6 +102,7 @@ export default function ActivityPage() {
   const docInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [uploadTarget, setUploadTarget] = useState<StudentRow | null>(null);
+  const [retouchFiles, setRetouchFiles] = useState<File[] | null>(null);
 
   const refresh = useCallback(
     async (resetRubric = false) => {
@@ -210,18 +212,16 @@ export default function ActivityPage() {
     uploadInput.current?.click();
   }
 
-  async function handleUploadFiles(files: FileList | null) {
-    if (!files || files.length === 0 || !uploadTarget) {
-      setUploadTarget(null);
-      return;
-    }
+  async function uploadSubmission(files: File[]) {
     const target = uploadTarget;
+    if (!target) return;
+    setRetouchFiles(null);
     setUploadTarget(null);
     await run(async () => {
       const form = new FormData();
       form.append('activityId', String(activityId));
       form.append('studentId', String(target.id));
-      const pages = await expandPdfFiles(Array.from(files), (progress) =>
+      const pages = await expandPdfFiles(files, (progress) =>
         setNotice(`${progress.file}: página ${progress.page} de ${progress.totalPages}`),
       );
       for (const file of pages) form.append('files', file);
@@ -229,6 +229,20 @@ export default function ActivityPage() {
       await refresh();
     }, `Entrega subida para ${target.name}`);
     if (uploadInput.current) uploadInput.current.value = '';
+  }
+
+  async function handleUploadFiles(files: FileList | null) {
+    if (!files || files.length === 0 || !uploadTarget) {
+      setUploadTarget(null);
+      return;
+    }
+    const list = Array.from(files);
+    // Las fotos pasan por el editor de retoque antes de subirse.
+    if (list.some((file) => file.type.startsWith('image/'))) {
+      setRetouchFiles(list);
+      return;
+    }
+    await uploadSubmission(list);
   }
 
   async function handleDocument(files: FileList | null, input: HTMLInputElement) {
@@ -358,6 +372,17 @@ export default function ActivityPage() {
 
   return (
     <>
+      {retouchFiles && (
+        <ImageRetouch
+          files={retouchFiles}
+          onCancel={() => {
+            setRetouchFiles(null);
+            setUploadTarget(null);
+            if (uploadInput.current) uploadInput.current.value = '';
+          }}
+          onApply={(files) => void uploadSubmission(files)}
+        />
+      )}
       <div className="crumbs">
         <Link to="/activities">Actividades</Link> / {activity.title}
       </div>

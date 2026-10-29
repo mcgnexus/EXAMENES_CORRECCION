@@ -40,6 +40,13 @@ describe('UAX answer sheet detection', () => {
     const resized = await sharp(photo).resize({width:1200}).toBuffer();
     expect((await detectAnswerSheet(resized)).map(x => x.answer)).toEqual(expected);
   });
+  it('keeps the same answers on dark, underexposed and hazy photographs', async () => {
+    const photo = await readFile(new URL('./fixtures/answer-sheet-anonymized.png', import.meta.url));
+    const dark = await sharp(photo).linear(0.5, 0).toBuffer();
+    expect((await detectAnswerSheet(dark)).map(x => x.answer)).toEqual(expected);
+    const hazy = await sharp(photo).linear(0.3, 100).toBuffer();
+    expect((await detectAnswerSheet(hazy)).map(x => x.answer)).toEqual(expected);
+  });
   it('rejects images without the four registration marks', async () => {
     const image = await sharp({create:{width:800,height:1000,channels:3,background:'#fff'}}).png().toBuffer();
     await expect(detectAnswerSheet(image)).rejects.toThrow('Plantilla no reconocida');

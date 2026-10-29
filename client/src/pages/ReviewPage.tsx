@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { EvaluationRow, SubmissionDetail } from '../../../shared/types';
 import { apiGet, apiSend, errorMessage, fileUrl } from '../api';
 import { questionCount,type OmrConfig } from '../../../shared/omr';
+import { CALIBRATION_LABELS,orderedCorners,project,type Point } from '../omrCalib';
 import GuidePanel from '../GuidePanel';
 
 interface ItemForm {
@@ -61,6 +62,10 @@ export default function ReviewPage() {
   const [testWorkflow,setTestWorkflow]=useState<{test:boolean;keyConfirmed:boolean;confirmed:boolean}|null>(null);
   const [bubblesConfirmed, setBubblesConfirmed] = useState(false);
   const [bubbleGrade, setBubbleGrade] = useState<{correct:number;wrong:number;blank:number;total:number;raw:number;scale:number}|null>(null);
+  const [brush, setBrush] = useState('');
+  const [manualMode, setManualMode] = useState(false);
+  const [manualPoints, setManualPoints] = useState<Point[]>([]);
+  const [manualSuggest, setManualSuggest] = useState(false);
 
   const load = async () => {
     const data = await apiGet<SubmissionDetail>(`/api/submissions/${submissionId}`);
@@ -84,6 +89,10 @@ export default function ReviewPage() {
     setAnswerKey({});
     setOmrConfig(null);
     setTestWorkflow(null);
+    setBrush('');
+    setManualMode(false);
+    setManualPoints([]);
+    setManualSuggest(false);
     void load().catch((err) => setError(errorMessage(err)));
   }, [submissionId]);
 
@@ -142,6 +151,7 @@ export default function ReviewPage() {
   async function detectBubbles() {
     setBubbleBusy(true);
     setError('');
+    setManualSuggest(false);
     try {
       const result = await apiSend<{answers: BubbleResult[];config:OmrConfig}>(`/api/submissions/${submissionId}/detect-bubbles`, 'POST');
       setBubbleAnswers(result.answers);
@@ -151,8 +161,73 @@ export default function ReviewPage() {
       setBubbleGrade(null);
       setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
       setNotice('Detección lista. Revisa y corrige cada fila antes de calificar.');
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) {
+      const message = errorMessage(err);
+      if (/Plantilla no reconocida|Disposición de referencias/.test(message)) setManualSuggest(true);
+      setError(message);
+    }
     finally { setBubbleBusy(false); }
+  }
+
+  const invalidateConfirmation = () => {
+    setBubblesConfirmed(false);
+    setBubbleGrade(null);
+    setTestWorkflow(prev => prev ? { ...prev, confirmed: false } : prev);
+  };
+
+  function setBubbleAnswer(question: number, value: string | null) {
+    invalidateConfirmation();
+    setBubbleAnswers(prev => prev?.map(x => x.question === question
+      ? { ...x, answer: value, state: value ? 'marked' as const : 'blank' as const }
+      : x) ?? null);
+  }
+
+  const applyBrush = (question: number) => setBubbleAnswer(question, brush === '' ? null : brush);
+
+  async function startManual() {
+    setError('');
+    setManualSuggest(false);
+    setManualPoints([]);
+    try {
+      if (!omrConfig) {
+        const config = await apiGet<OmrConfig>(`/api/activities/${detail!.activity.id}/omr`);
+        setOmrConfig(config);
+        setAnswerKey(config.key);
+      }
+      setBubbleAnswers(null);
+      invalidateConfirmation();
+      setManualMode(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  function manualClick(p: Point) {
+    if (!omrConfig || manualPoints.length >= 4) return;
+    const next = [...manualPoints, p];
+    setManualPoints(next);
+    if (next.length < 4) return;
+    try {
+      const corners = orderedCorners(next);
+      const template = omrConfig.template;
+      const rows: BubbleResult[] = [];
+      for (const block of template.blocks) {
+        for (let row = 0; row < block.rows; row++) {
+          const circles = [...template.options].map((_, col) => {
+            const point = project({ x: block.x + col * block.dx, y: block.y + row * block.dy }, corners);
+            return { x: point.x, y: point.y, radius: template.radius, located: true };
+          });
+          rows.push({ question: block.first + row, answer: null, confidence: 0, state: 'blank', circles });
+        }
+      }
+      setBubbleAnswers(rows);
+      invalidateConfirmation();
+      setManualMode(false);
+      setNotice(`Rejilla manual generada para ${rows.length} preguntas: marca cada respuesta pulsando sobre la foto con el pincel.`);
+    } catch (err) {
+      setManualPoints([]);
+      setError(errorMessage(err));
+    }
   }
 
   async function calculateBubbleGrade() {
@@ -250,24 +325,44 @@ export default function ReviewPage() {
       )}
       <section className="card" id="submission-detection" style={{marginBottom:16}}>
         <div className="card-head"><h2>Corrección de test · {omrConfig?.template.name??'plantilla de la actividad'} (primera página)</h2>
-          <button className="btn" disabled={bubbleBusy} onClick={() => void detectBubbles()}>{bubbleBusy ? 'Detectando…' : 'Detectar burbujas'}</button>
+          <span className="row" style={{gap:8}}>
+            <button className="btn" disabled={bubbleBusy||manualMode} onClick={() => void detectBubbles()}>{bubbleBusy ? 'Detectando…' : 'Detectar burbujas'}</button>
+            <button className="btn" disabled={bubbleBusy||manualMode} onClick={() => void startManual()}>Modo manual</button>
+          </span>
         </div>
         <p className="small muted">Hojas con cuatro cuadrados de referencia y bloques regulares. La detección es una propuesta: revisa todas las respuestas en la imagen antes de calcular. <Link to={`/activities/${detail.activity.id}`}>Configurar plantilla, clave y puntuación en la actividad</Link>.</p>
+        {manualSuggest&&!bubbleAnswers&&<div className="notice">La detección automática no ha encontrado las cuatro referencias. Puedes repetir la foto o usar el <strong>Modo manual</strong>: pulsa el botón, marca las cuatro referencias sobre esta foto y rellena la rejilla a mano.</div>}
+        {manualMode&&pages[0]&&(
+          <div style={{marginTop:12}}>
+            <p>{manualPoints.length<4?`Modo manual · pulsa el centro de ${CALIBRATION_LABELS[manualPoints.length]} sobre la foto.`:'Generando la rejilla…'}</p>
+            <div style={{position:'relative'}}>
+              <img src={pages[0].url} alt="Foto de la entrega del alumno" style={{width:'100%',display:'block'}}/>
+              <svg viewBox="0 0 1 1" preserveAspectRatio="none" aria-label="Pulsa las cuatro referencias sobre la foto" onClick={e=>{const r=e.currentTarget.getBoundingClientRect();manualClick({x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height});}} style={{position:'absolute',inset:0,width:'100%',height:'100%',cursor:'crosshair'}}>
+                {manualPoints.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r=".005" fill="#ef4444"/>)}
+                {manualPoints.length===4&&omrConfig&&omrConfig.template.blocks.flatMap((b,bi)=>Array.from({length:Math.min(200,b.rows)},(_,row)=>[...omrConfig.template.options].map((_,col)=>{const p=project({x:b.x+col*b.dx,y:b.y+row*b.dy},manualPoints);return <circle key={`${bi}-${row}-${col}`} cx={p.x} cy={p.y} r=".003" fill="#16a34a"/>;})))}
+              </svg>
+            </div>
+            <button className="btn" style={{marginTop:8}} onClick={()=>{setManualMode(false);setManualPoints([]);}}>Cancelar modo manual</button>
+          </div>
+        )}
         {bubbleAnswers && <>
-          {pages[0]&&<details><summary>Ver evidencia: círculos localizados sobre la foto</summary>
+          {pages[0]&&<details><summary>Ver evidencia: círculos localizados sobre la foto (pulsa una burbuja con el pincel activo para asignar la respuesta)</summary>
+            <div className="row" style={{margin:'8px 0'}}>
+              <span className="small muted">Pincel:</span>
+              {[...(omrConfig?.template.options??'ABCD')].map(v=><button key={v} className={`btn small${brush===v?' primary':''}`} onClick={()=>setBrush(v)}>{v}</button>)}
+              <button className={`btn small${brush===''?' primary':''}`} onClick={()=>setBrush('')}>En blanco</button>
+              <span className="small muted">{brush===''?'un clic deja la pregunta en blanco':`un clic marca la opción ${brush}`}</span>
+            </div>
             <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" style={{width:'100%',height:600}} role="img" aria-label="Detecciones sobre la foto original">
               <image href={pages[0].url} width="1000" height="1000" preserveAspectRatio="none"/>
-              {bubbleAnswers.flatMap(row=>row.circles?.map((c,i)=><circle key={`${row.question}-${i}`} cx={c.x*1000} cy={c.y*1000} r={c.radius*1000} fill="none" stroke={c.located?'#16a34a':'#ef4444'} strokeWidth="1.5"/>)??[])}
+              {bubbleAnswers.flatMap(row=>row.circles?.map((c,i)=><g key={`${row.question}-${i}`} onClick={()=>applyBrush(row.question)} style={{cursor:'pointer'}}><circle cx={c.x*1000} cy={c.y*1000} r={c.radius*1000} fill="none" stroke={c.located?'#16a34a':'#ef4444'} strokeWidth="1.5"/><circle cx={c.x*1000} cy={c.y*1000} r={Math.max(c.radius*1000,10)} fill="transparent"/></g>)??[])}
             </svg>
           </details>}
           {evidenceQuestion&&pages[0]&&(()=>{const row=bubbleAnswers.find(r=>r.question===evidenceQuestion),cs=row?.circles;if(!cs?.length)return null;const x=Math.max(0,Math.min(...cs.map(c=>c.x))-.04),y=Math.max(0,Math.min(...cs.map(c=>c.y))-.035),width=Math.min(1-x,Math.max(...cs.map(c=>c.x))-x+.04);return <div><p>Pregunta {evidenceQuestion}: {row?.reason??'Coteja la marca con la opción detectada.'}</p><svg viewBox={`${x*1000} ${y*1000} ${width*1000} 70`} style={{width:'100%',height:150}} role="img" aria-label={`Recorte pregunta ${evidenceQuestion}`}><image href={pages[0].url} width="1000" height="1000" preserveAspectRatio="none"/></svg></div>;})()}
           <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Detectada (editable)</th><th>Clave correcta</th></tr></thead><tbody>
             {bubbleAnswers.map(row => <tr key={row.question}>
               <td><button className="btn small" onClick={()=>setEvidenceQuestion(row.question)}>Ver {row.question}</button>{row.state==='ambiguous' ? ' · REVISAR' : ''}{row.reason&&<p className="small">{row.reason}</p>}</td>
-              <td><select aria-label={`Respuesta pregunta ${row.question}`} value={row.state==='ambiguous' ? '?' : row.answer ?? ''} onChange={e => {
-                setBubblesConfirmed(false);setBubbleGrade(null);setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
-                setBubbleAnswers(prev => prev?.map(x => x.question===row.question ? {...x,answer:e.target.value||null,state:e.target.value?'marked':'blank'} : x)??null);
-              }}>{row.state==='ambiguous'&&<option value="?">Dudosa: selecciona una opción</option>}<option value="">En blanco</option>{[...(omrConfig?.template.options??'ABCD')].map(v=><option key={v}>{v}</option>)}</select></td>
+              <td><select aria-label={`Respuesta pregunta ${row.question}`} value={row.state==='ambiguous' ? '?' : row.answer ?? ''} onChange={e => setBubbleAnswer(row.question, e.target.value || null)}>{row.state==='ambiguous'&&<option value="?">Dudosa: selecciona una opción</option>}<option value="">En blanco</option>{[...(omrConfig?.template.options??'ABCD')].map(v=><option key={v}>{v}</option>)}</select></td>
               <td>{answerKey[row.question]??'Sin clave confirmada'}</td>
             </tr>)}
           </tbody></table></div>
@@ -275,7 +370,7 @@ export default function ReviewPage() {
           <label style={{display:'block',marginTop:12}}><input type="checkbox" checked={bubblesConfirmed} onChange={e=>{setBubblesConfirmed(e.target.checked);setBubbleGrade(null);}} /> He cotejado las {omrConfig?questionCount(omrConfig.template):bubbleAnswers.length} respuestas y la clave con los documentos originales.</label>
           <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Confirmar respuestas y previsualizar puntuación</button>
           {omrConfig&&<p className="small muted">Acierto {omrConfig.scoring.correct}; error {omrConfig.scoring.wrong}; blanco {omrConfig.scoring.blank}; escala {omrConfig.scoring.scale}.</p>}
-          {bubbleGrade && <p role="status">Respuestas confirmadas guardadas: el LLM usará esta lista, no la foto del alumno. {bubbleGrade.correct} aciertos · {bubbleGrade.wrong} errores · {bubbleGrade.blank} en blanco · Bruto: {bubbleGrade.raw.toFixed(2)} · Nota: {bubbleGrade.total.toFixed(2)} / {bubbleGrade.scale}. La nota es una previsualización, no una aprobación. Ya puedes lanzar la corrección desde la actividad.</p>}
+          {bubbleGrade && <p role="status">Respuestas confirmadas guardadas: el LLM usará esta lista, no la foto del alumno. {bubbleGrade.correct} aciertos · {bubbleGrade.wrong} errores · {bubbleGrade.blank} en blanco · Bruto: {bubbleGrade.raw.toFixed(2)} · Nota: {bubbleGrade.total.toFixed(2)} / {bubbleGrade.scale}. La corrección aplicará exactamente esta nota (cálculo determinista); el LLM solo añadirá comentarios. Ya puedes lanzar la corrección desde la actividad.</p>}
         </>}
       </section>
       {detail.submission.error && (

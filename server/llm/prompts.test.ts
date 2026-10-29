@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildOmrCommentSystemPrompt,
+  buildOmrCommentUserPrompt,
   buildReadSystemPrompt,
   buildReadUserPrompt,
   buildScanUserPrompt,
@@ -111,6 +113,22 @@ describe('verificación de lectura', () => {
     const user = buildReadUserPrompt(2);
     expect(user).toContain('Página N');
     expect(user).toContain('Estado: RESPONDIDA');
+  });
+});
+
+describe('comentarios de corrección OMR (sin puntos)', () => {
+  it('prohíbe puntuar y prohíbe alterar las respuestas del detector', () => {
+    const system = buildOmrCommentSystemPrompt('bioquimica');
+    expect(system).toContain('NO asignes puntos');
+    expect(system).toContain('fuente EXCLUSIVA');
+    expect(system).toContain('null significa EN BLANCO');
+    const user = buildOmrCommentUserPrompt(
+      { 1: 'A' },
+      [{ question: 1, answer: 'B' }],
+      { correct: 0, wrong: 1, blank: 0, raw: -0.33, total: -0.33, scale: 50 },
+    );
+    expect(user).toContain('"answer":"B"');
+    expect(user).toContain('no la modifiques');
   });
 });
 

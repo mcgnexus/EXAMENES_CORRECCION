@@ -2,23 +2,8 @@ import { useEffect,useState } from 'react';
 import type { DocumentRow } from '../../shared/types';
 import { defaultConfig,configSchema,questionCount,type OmrConfig } from '../../shared/omr';
 import { apiGet,apiSend,errorMessage } from './api';
+import { CALIBRATION_LABELS,orderedCorners,project,unproject,type Point } from './omrCalib';
 
-type Point={x:number;y:number};
-function project(p:Point,c:Point[]){
-  const [tl,tr,bl,br]=c;
-  return {x:(1-p.y)*((1-p.x)*tl.x+p.x*tr.x)+p.y*((1-p.x)*bl.x+p.x*br.x),y:(1-p.y)*((1-p.x)*tl.y+p.x*tr.y)+p.y*((1-p.x)*bl.y+p.x*br.y)};
-}
-function unproject(target:Point,c:Point[]):Point{
-  let p={x:.5,y:.5};
-  for(let i=0;i<20;i++){
-    const v=project(p,c),a=project({x:p.x+.0001,y:p.y},c),b=project({x:p.x,y:p.y+.0001},c);
-    const ax=(a.x-v.x)/.0001,ay=(a.y-v.y)/.0001,bx=(b.x-v.x)/.0001,by=(b.y-v.y)/.0001,det=ax*by-ay*bx;
-    if(Math.abs(det)<1e-8) throw new Error('Referencias inválidas: vuelve a seleccionar las cuatro esquinas.');
-    const dx=target.x-v.x,dy=target.y-v.y;
-    p={x:p.x+(dx*by-dy*bx)/det,y:p.y+(dy*ax-dx*ay)/det};
-  }
-  return p;
-}
 export default function OmrSettings({activityId,documents}:{activityId:number;documents:DocumentRow[]}){
   const [config,setConfig]=useState<OmrConfig>(structuredClone(defaultConfig));
   const [busy,setBusy]=useState(false),[loaded,setLoaded]=useState(false),[message,setMessage]=useState('');
@@ -44,13 +29,13 @@ export default function OmrSettings({activityId,documents}:{activityId:number;do
       setMessage(`Propuesta generada por IA (el LLM ha respondido el test), aún sin confirmar ni guardar. ${r.warnings.join(' ')}`);
     }catch(e){setMessage(errorMessage(e));}finally{setBusy(false);}
   }
-  const labels=['cuadrado superior izquierdo','cuadrado superior derecho','cuadrado inferior izquierdo','cuadrado inferior derecho','primera opción de la primera fila del bloque','última opción de la primera fila del bloque','primera opción de la última fila del bloque'];
+  const labels=CALIBRATION_LABELS;
   function clickImage(p:Point){
     if(!calibrating||busy)return;
     const next=[...points,p];setPoints(next);
     if(next.length===7){
       try{
-        if(!(next[0].x<next[1].x&&next[2].x<next[3].x&&next[0].y<next[2].y&&next[1].y<next[3].y)) throw new Error('Orden de referencias inválido.');
+        orderedCorners(next);
         const a=unproject(next[4],next),b=unproject(next[5],next),c=unproject(next[6],next),old=config.template.blocks[block];
         const blocks=config.template.blocks.map((v,i)=>i===block?{...v,x:a.x,y:a.y,dx:(b.x-a.x)/(config.template.options.length-1),dy:(c.y-a.y)/(old.rows-1)}:v);
         const candidate={...config,template:{...config.template,blocks},key:{},keyConfirmed:false};

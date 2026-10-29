@@ -8,30 +8,71 @@ export interface BubbleDetection {
   state:'marked'|'blank'|'ambiguous';scores:number[];reason?:string;
   circles?:{x:number;y:number;radius:number;located:boolean}[];
 }
+interface Rendered{data:Buffer;info:{width:number;height:number}}
+const preheat=async(buffer:Buffer,enhance:boolean):Promise<Rendered>=>
+  enhance
+    ? sharp(buffer).rotate().normalise().sharpen({sigma:1}).resize({width:1800,withoutEnlargement:true}).removeAlpha().greyscale().raw().toBuffer({resolveWithObject:true})
+    : sharp(buffer).rotate().resize({width:1800,withoutEnlargement:true}).removeAlpha().greyscale().raw().toBuffer({resolveWithObject:true});
 /** OpenCV WASM runs server-side; student images are never sent to an LLM. */
 export async function detectAnswerSheet(buffer:Buffer,template:OmrTemplate=defaultTemplate):Promise<BubbleDetection[]>{
   template=templateSchema.parse(template);
   const cv=await cvModule;
-  const {data,info}=await sharp(buffer).rotate().resize({width:1800,withoutEnlargement:true}).removeAlpha().greyscale().raw().toBuffer({resolveWithObject:true});
-  const w=info.width,h=info.height;
+  const base=await preheat(buffer,false);
+  const w=base.info.width,h=base.info.height;
   if(w<700||h<700)throw new Error('Resolución insuficiente: fotografía la hoja completa con mayor nitidez.');
   const allocated:{delete:()=>void}[]=[];
   const keep=<T extends {delete:()=>void}>(v:T):T=>{allocated.push(v);return v;};
   try{
-    const src=keep(cv.matFromArray(h,w,cv.CV_8UC1,data));
-    const binary=keep(new cv.Mat()),contours=keep(new cv.MatVector()),hierarchy=keep(new cv.Mat());
-    cv.threshold(src,binary,0,255,cv.THRESH_BINARY_INV|cv.THRESH_OTSU);
-    cv.findContours(binary,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-    const markers:{x:number;y:number}[]=[];
-    for(let i=0;i<contours.size();i++){
-      const c=contours.get(i);
-      try{const r=cv.boundingRect(c),area=cv.contourArea(c),polygon=new cv.Mat();
-        try{cv.approxPolyDP(c,polygon,cv.arcLength(c,true)*.035,true);
-        if(polygon.rows===4&&r.width>w*.008&&r.width<w*.03&&r.height>h*.004&&r.height<h*.025&&r.width/r.height>.65&&r.width/r.height<1.5&&area/(r.width*r.height)>.70)markers.push({x:r.x+r.width/2,y:r.y+r.height/2});
-        }finally{polygon.delete();}
-      }finally{c.delete();}
+    // Primera pasada sin realce (las fotos correctas no deben cambiar); si no
+    // hay exactamente cuatro referencias, se reintenta con realce automático.
+    const findMarkers=(image:Rendered)=>{
+      const src=keep(cv.matFromArray(h,w,cv.CV_8UC1,image.data));
+      const binary=keep(new cv.Mat()),contours=keep(new cv.MatVector()),hierarchy=keep(new cv.Mat());
+      cv.threshold(src,binary,0,255,cv.THRESH_BINARY_INV|cv.THRESH_OTSU);
+      cv.findContours(binary,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+      const markers:{x:number;y:number}[]=[];
+      for(let i=0;i<contours.size();i++){
+        const c=contours.get(i);
+        try{const r=cv.boundingRect(c),area=cv.contourArea(c),polygon=new cv.Mat();
+          try{cv.approxPolyDP(c,polygon,cv.arcLength(c,true)*.035,true);
+          if(polygon.rows===4&&r.width>w*.008&&r.width<w*.03&&r.height>h*.004&&r.height<h*.025&&r.width/r.height>.65&&r.width/r.height<1.5&&area/(r.width*r.height)>.70)markers.push({x:r.x+r.width/2,y:r.y+r.height/2});
+          }finally{polygon.delete();}
+        }finally{c.delete();}
+      }
+      return {src,markers};
+    };
+    const first=findMarkers(base);
+    let src=first.src,markers=first.markers;
+    // Cuadrilátero de área máxima: con ruido ocasional (una 5ª mancha cuadrada),
+    // las cuatro referencias reales forman el mayor rectángulo convexo posible.
+    const selectQuad=(points:{x:number;y:number}[])=>{
+      if(points.length<4)return null;
+      let best:null|{x:number;y:number}[]=null,bestArea=0;
+      for(let a=0;a<points.length-3;a++)for(let b=a+1;b<points.length-2;b++)for(let c=b+1;c<points.length-1;c++)for(let d=c+1;d<points.length;d++){
+        const quad=[points[a],points[b],points[c],points[d]];
+        const cx=quad.reduce((s,p)=>s+p.x,0)/4,cy=quad.reduce((s,p)=>s+p.y,0)/4;
+        const ordered=[...quad].sort((p,q)=>Math.atan2(p.y-cy,p.x-cx)-Math.atan2(q.y-cy,q.x-cx));
+        let area=0;
+        for(let i=0;i<4;i++){const p=ordered[i],q=ordered[(i+1)%4];area+=p.x*q.y-q.x*p.y;}
+        area=Math.abs(area)/2;
+        if(area>bestArea){bestArea=area;best=ordered;}
+      }
+      return best;
+    };
+    const laidOut=(quad:ReturnType<typeof selectQuad>)=>{
+      if(!quad)return false;
+      const sorted=[...quad].sort((a,b)=>a.y-b.y);
+      const [tl,tr]=sorted.slice(0,2).sort((a,b)=>a.x-b.x),[bl,br]=sorted.slice(2).sort((a,b)=>a.x-b.x);
+      return tr.x-tl.x>w*.4&&bl.y-tl.y>h*.2&&[tl,tr,bl,br].every(Boolean);
+    };
+    let quad=laidOut(selectQuad(markers))?selectQuad(markers):null;
+    if(!quad){
+      const second=findMarkers(await preheat(buffer,true));
+      const secondQuad=selectQuad(second.markers);
+      if(laidOut(secondQuad)){src=second.src;quad=secondQuad;}
+      else throw new Error(`Plantilla no reconocida: ${markers.length} referencias localizadas en lugar de cuatro. Repite la foto o revisa la plantilla.`);
     }
-    if(markers.length!==4)throw new Error(`Plantilla no reconocida: ${markers.length} referencias localizadas en lugar de cuatro. Repite la foto o revisa la plantilla.`);
+    markers=quad!;
     markers.sort((a,b)=>a.y-b.y);
     const [tl,tr]=markers.slice(0,2).sort((a,b)=>a.x-b.x),[bl,br]=markers.slice(2).sort((a,b)=>a.x-b.x);
     if(tr.x-tl.x<w*.4||bl.y-tl.y<h*.2)throw new Error('Disposición de referencias inválida.');

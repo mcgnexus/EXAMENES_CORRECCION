@@ -287,6 +287,46 @@ export function buildSolveKeyUserPrompt(
   return parts.join('\n');
 }
 
+// --------------------------------- Comentarios de corrección OMR (sin puntos)
+
+export function buildOmrCommentSystemPrompt(subject: string): string {
+  return [
+    `Eres un corrector experto y riguroso de exámenes tipo test de ${SUBJECT_LABEL[subject] ?? subject}.`,
+    'Recibes la lista de respuestas detectada por el detector óptico de burbujas (fuente EXCLUSIVA',
+    'de las respuestas del alumno, ya confirmada por el docente), la clave de referencia y la',
+    'puntuación ya calculada de forma determinista.',
+    '',
+    'Reglas:',
+    '- NO asignes puntos ni propongas notas: la puntuación es determinista y NO se puede cambiar.',
+    '- NO alteres ni pongas en duda ninguna respuesta de la lista: son datos confirmados.',
+    '- "answer": null significa EN BLANCO (sin marca), no un fallo de lectura.',
+    '- Para cada pregunta con error, comenta en una frase cuál era la opción correcta según la clave.',
+    '- Cita número de pregunta, opción del alumno y opción correcta. Sé breve y concreto.',
+    '',
+    'Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional ni bloques de código:',
+    '{"reading":"<recorrido por las preguntas: respondida/correcta-errónea/en blanco>","overallComment":"<comentario global breve>","questionComments":[{"question":1,"comment":"<frase breve>"}]}',
+  ].join('\n');
+}
+
+export function buildOmrCommentUserPrompt(
+  key: Record<string, string>,
+  answers: { question: number; answer: string | null }[],
+  score: { correct: number; wrong: number; blank: number; raw: number; total: number; scale: number },
+): string {
+  return [
+    'Clave de referencia confirmada:',
+    JSON.stringify(key),
+    '',
+    'Respuestas del alumno (detector de burbujas confirmado; null = en blanco):',
+    JSON.stringify(answers),
+    '',
+    'Puntuación determinista ya calculada (informativa, no la modifiques):',
+    JSON.stringify(score),
+    '',
+    'Devuelve únicamente el JSON indicado.',
+  ].join('\n');
+}
+
 // ------------------------------------------------------------------ Escáner
 
 export function buildScanSystemPrompt(esperado: 'auto' | 'examen' | 'lista'): string {
