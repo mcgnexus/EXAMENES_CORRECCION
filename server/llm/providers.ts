@@ -741,6 +741,9 @@ const simuladoProvider: ProviderDefinition = {
       enunciado: '',
       apartados: [],
       nombres: [],
+      dni: '',
+      curso: '',
+      clase: '',
       observaciones: 'Proveedor simulado: sin capacidad de visión para extraer información.',
     };
   },

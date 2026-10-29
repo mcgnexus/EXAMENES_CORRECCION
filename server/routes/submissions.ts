@@ -87,6 +87,9 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
     if (!Number.isInteger(activityId) || !Number.isInteger(studentId)) {
       throw badRequest('Faltan activityId o studentId');
     }
+    const dni = (fields.dni ?? '').trim() || null;
+    const course = (fields.course ?? '').trim() || null;
+    const className = (fields.className ?? '').trim() || null;
     if (files.length === 0) throw badRequest('No se ha recibido ningún archivo');
 
     const activity = await db
@@ -109,12 +112,13 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
     let submissionId: number;
     if (existing) {
       submissionId = existing.id;
+      await db.prepare('UPDATE submissions SET dni = COALESCE($1, dni), course = COALESCE($2, course), class_name = COALESCE($3, class_name) WHERE id = $4').run(dni, course, className, submissionId);
     } else {
       const created = await db
         .prepare(
-          "INSERT INTO submissions (activity_id, student_id, status, created_at) VALUES ($1, $2, 'uploaded', $3) RETURNING id",
+          "INSERT INTO submissions (activity_id, student_id, status, created_at, dni, course, class_name) VALUES ($1, $2, 'uploaded', $3, $4, $5, $6) RETURNING id",
         )
-        .get<{ id: number }>(activityId, studentId, nowIso());
+        .get<{ id: number }>(activityId, studentId, nowIso(), dni, course, className);
       submissionId = created?.id ?? 0;
     }
 

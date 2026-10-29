@@ -12,6 +12,7 @@ import type {
   SolutionTemplateRow,
   Subject,
   SubmissionRow,
+  ScanResult,
 } from '../../../shared/types';
 import { apiGet, apiSend, apiUpload, errorMessage, fileUrl } from '../api';
 import { expandPdfFiles } from '../pdf';
@@ -101,8 +102,14 @@ export default function ActivityPage() {
   const [templatesBusy, setTemplatesBusy] = useState(false);
   const docInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
+  const scanAssignInput = useRef<HTMLInputElement>(null);
   const [uploadTarget, setUploadTarget] = useState<StudentRow | null>(null);
   const [retouchFiles, setRetouchFiles] = useState<File[] | null>(null);
+  const [scanAssignFiles, setScanAssignFiles] = useState<File[] | null>(null);
+  const [scanAssignBusy, setScanAssignBusy] = useState(false);
+  const [scanAssignResult, setScanAssignResult] = useState<ScanResult | null>(null);
+  const [scanAssignFields, setScanAssignFields] = useState<{ name: string; dni: string; course: string; className: string }>({ name: '', dni: '', course: '', className: '' });
+  const [scanAssignStudentId, setScanAssignStudentId] = useState<string>('');
 
   const refresh = useCallback(
     async (resetRubric = false) => {
@@ -229,6 +236,62 @@ export default function ActivityPage() {
       await refresh();
     }, `Entrega subida para ${target.name}`);
     if (uploadInput.current) uploadInput.current.value = '';
+  }
+
+  async function scanAssignExam(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+    setScanAssignBusy(true);
+    setError('');
+    try {
+      const form = new FormData();
+      form.append('esperado', 'examen');
+      const pages = await expandPdfFiles(list);
+      for (const page of pages) form.append('file', page);
+      const result = await apiUpload<ScanResult>('/api/scan', form);
+      setScanAssignFiles(list);
+      setScanAssignResult(result);
+      const name = result.nombres?.[0] ?? '';
+      setScanAssignFields({ name, dni: result.dni ?? '', course: result.curso ?? '', className: result.clase ?? '' });
+      // find best match
+      const match = bundle?.students.find((s) => s.name.toLowerCase() === name.toLowerCase());
+      setScanAssignStudentId(match ? String(match.id) : '');
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setScanAssignBusy(false);
+      if (scanAssignInput.current) scanAssignInput.current.value = '';
+    }
+  }
+
+  async function confirmScanAssign() {
+    const targetName = scanAssignFields.name.trim();
+    if (!targetName) {
+      setError('Indica el nombre del alumno');
+      return;
+    }
+    await run(async () => {
+      let studentId = Number(scanAssignStudentId);
+      if (!Number.isInteger(studentId) || studentId <= 0) {
+        // create new student in the activity's class
+        const cls = bundle?.activity.classId;
+        if (!cls) throw new Error('La actividad no tiene clase asignada');
+        const created = await apiSend<{ id: number }>(`/api/classes/${cls}/students`, 'POST', { name: targetName });
+        studentId = created.id;
+      }
+      const form = new FormData();
+      form.append('activityId', String(activityId));
+      form.append('studentId', String(studentId));
+      if (scanAssignFields.dni) form.append('dni', scanAssignFields.dni);
+      if (scanAssignFields.course) form.append('course', scanAssignFields.course);
+      if (scanAssignFields.className) form.append('className', scanAssignFields.className);
+      const pages = await expandPdfFiles(scanAssignFiles ?? []);
+      for (const file of pages) form.append('files', file);
+      await apiUpload('/api/submissions', form);
+      setScanAssignResult(null);
+      setScanAssignFiles(null);
+      await refresh();
+    }, `Entrega subida para ${targetName}`);
   }
 
   async function handleUploadFiles(files: FileList | null) {
@@ -740,6 +803,24 @@ export default function ActivityPage() {
             {submissions.length} / {bundle.students.length}
           </span>
         </div>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <button
+            className="btn ghost small"
+            disabled={busy || scanAssignBusy}
+            onClick={() => scanAssignInput.current?.click()}
+          >
+            {scanAssignBusy ? '📷 Escaneando…' : '📷 Escanear y asignar alumno'}
+          </button>
+          <span className="small muted">Sube un examen resuelto; se detecta el alumno automáticamente.</span>
+          <input
+            ref={scanAssignInput}
+            type="file"
+            multiple
+            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            style={{ display: 'none' }}
+            onChange={(event) => void scanAssignExam(event.target.files)}
+          />
+        </div>
 
         {!activity.classId && (
           <div className="notice" style={{ marginBottom: 12 }}>
@@ -844,7 +925,7 @@ export default function ActivityPage() {
                       disabled={submission.status === 'running' || submission.status === 'queued'}
                     />
                   </td>
-                  <td>{submission.studentName}</td>
+                  <td>{submission.studentName}{submission.dni ? <br /> : null}{submission.dni ? <span className="small muted">DNI {submission.dni}</span> : null}</td>
                   <td>
                     <span className={`badge ${submission.status}`}>
                       {STATUS_LABEL[submission.status] ?? submission.status}
@@ -918,6 +999,42 @@ export default function ActivityPage() {
         )}
       </section>
 
+      {scanAssignResult && (
+        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="card" style={{ width: '90%', maxWidth: 520, background: '#fff' }} onClick={(e) => e.stopPropagation()}>
+            <div className="card-head">
+              <h2>Confirmar alumno detectado</h2>
+              <button className="btn small" onClick={() => { setScanAssignResult(null); setScanAssignFiles(null); }}>Cerrar</button>
+            </div>
+            <div className="stack">
+              <label className="field">Nombre
+                <input value={scanAssignFields.name} onChange={(e) => setScanAssignFields({ ...scanAssignFields, name: e.target.value })} />
+              </label>
+              <label className="field">DNI
+                <input value={scanAssignFields.dni} onChange={(e) => setScanAssignFields({ ...scanAssignFields, dni: e.target.value })} />
+              </label>
+              <label className="field">Curso
+                <input value={scanAssignFields.course} onChange={(e) => setScanAssignFields({ ...scanAssignFields, course: e.target.value })} />
+              </label>
+              <label className="field">Clase
+                <input value={scanAssignFields.className} onChange={(e) => setScanAssignFields({ ...scanAssignFields, className: e.target.value })} />
+              </label>
+              <label className="field">Alumno existente
+                <select value={scanAssignStudentId} onChange={(e) => setScanAssignStudentId(e.target.value)}>
+                  <option value="">Crear nuevo alumno</option>
+                  {(bundle?.students ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="actions" style={{ marginTop: 12 }}>
+              <button className="btn primary" disabled={busy} onClick={() => void confirmScanAssign()}>Confirmar y subir</button>
+              <button className="btn" onClick={() => { setScanAssignResult(null); setScanAssignFiles(null); }}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
       {notice && <div className="toast">{notice}</div>}
     </>
   );

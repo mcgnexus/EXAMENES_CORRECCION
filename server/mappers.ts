@@ -172,6 +172,9 @@ interface SubmissionDb {
   activity_id: number;
   student_id: number;
   student_name: string;
+  dni: string | null;
+  course: string | null;
+  class_name: string | null;
   status: string;
   error: string | null;
   created_at: string;
@@ -184,6 +187,9 @@ function mapSubmission(row: SubmissionDb): SubmissionRow {
     activityId: row.activity_id,
     studentId: row.student_id,
     studentName: row.student_name,
+    dni: row.dni,
+    course: row.course,
+    className: row.class_name,
     status: row.status as SubmissionRow['status'],
     error: row.error,
     createdAt: row.created_at,

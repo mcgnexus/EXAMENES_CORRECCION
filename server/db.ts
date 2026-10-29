@@ -198,6 +198,9 @@ const MIGRATIONS: { id: string; sql: string }[] = [
   );`},
   {id:'004_omr_overrides',sql:`ALTER TABLE submission_omr_answers ADD COLUMN IF NOT EXISTS overrides JSONB NOT NULL DEFAULT '{}'::jsonb;`},
   {id:'004_omr_overrides',sql:`ALTER TABLE submission_omr_answers ADD COLUMN IF NOT EXISTS overrides JSONB NOT NULL DEFAULT '{}'::jsonb;`},
+  {id:'005_submission_identity',sql:`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS dni TEXT;`},
+  {id:'005_submission_identity',sql:`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS course TEXT;`},
+  {id:'005_submission_identity',sql:`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS class_name TEXT;`},
 ];
 
 type Runner = (sql: string, params: unknown[]) => Promise<QueryResult>;

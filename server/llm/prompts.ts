@@ -349,6 +349,9 @@ export function buildScanSystemPrompt(esperado: 'auto' | 'examen' | 'lista'): st
     ' "enunciado":"<texto completo del enunciado o preguntas, con saltos de línea>",',
     ' "apartados":[{"titulo":"<apartado>","descripcion":"<qué valora>","puntos":<número>}],',
     ' "nombres":["<nombre completo del alumno>", …],',
+    ' "dni":"<DNI o documento de identidad del alumno si aparece>",',
+    ' "curso":"<curso del alumno si aparece>",',
+    ' "clase":"<clase/grupo del alumno si aparece>",',
     ' "observaciones":"<nota breve>"}',
     'Reglas: los nombres completos sin numeración ni separadores CSV; los "puntos" con decimal;',
     'si el documento no es ni examen ni lista, usa tipo "otro" y deja vacíos el resto de campos.',
@@ -401,6 +404,9 @@ export const scanResponseSchema = z.object({
     .max(20)
     .default([]),
   nombres: z.array(z.string()).max(80).default([]),
+  dni: z.string().optional().default(''),
+  curso: z.string().optional().default(''),
+  clase: z.string().optional().default(''),
   observaciones: z.string().optional().default(''),
 });
 
@@ -427,6 +433,9 @@ export function parseScanResponse(text: string): ScanResult {
     enunciado: parsed.enunciado.trim().slice(0, 12000),
     apartados,
     nombres,
+    dni: (parsed.dni ?? '').trim().slice(0, 40),
+    curso: (parsed.curso ?? '').trim().slice(0, 80),
+    clase: (parsed.clase ?? '').trim().slice(0, 80),
     observaciones: parsed.observaciones.trim().slice(0, 1000),
   };
 }
