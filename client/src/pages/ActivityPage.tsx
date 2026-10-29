@@ -1021,16 +1021,17 @@ export default function ActivityPage() {
               </label>
               <label className="field">Alumno existente
                 <select value={scanAssignStudentId} onChange={(e) => setScanAssignStudentId(e.target.value)}>
-                  <option value="">Crear nuevo alumno</option>
+                  <option value="">Crear nuevo alumno{!bundle?.activity.classId ? ' (requiere clase asignada a la actividad)' : ''}</option>
                   {(bundle?.students ?? []).map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
               </label>
             </div>
+            {error && <div className="notice" style={{ marginBottom: 8 }}>{error}</div>}
             <div className="actions" style={{ marginTop: 12 }}>
               <button className="btn primary" disabled={busy} onClick={() => void confirmScanAssign()}>Confirmar y subir</button>
-              <button className="btn" onClick={() => { setScanAssignResult(null); setScanAssignFiles(null); }}>Cancelar</button>
+              <button className="btn" onClick={() => { setScanAssignResult(null); setScanAssignFiles(null); setError(''); }}>Cancelar</button>
             </div>
           </div>
         </div>
