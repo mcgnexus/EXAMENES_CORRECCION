@@ -89,9 +89,6 @@ export interface SubmissionRow {
   activityId: number;
   studentId: number;
   studentName: string;
-  dni: string | null;
-  course: string | null;
-  className: string | null;
   status: SubmissionStatus;
   error: string | null;
   createdAt: string;

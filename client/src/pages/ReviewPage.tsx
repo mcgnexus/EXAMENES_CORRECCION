@@ -393,25 +393,6 @@ export default function ReviewPage() {
               })}
             </tbody></table></div>
           </details>}
-          {omrConfig?.keyConfirmed&&<details open style={{marginTop:12}}>
-            <summary><strong>Comparación: clave correcta (izquierda) vs respuesta del alumno (derecha)</strong></summary>
-            <p className="small muted">Pulsa ✓ para forzar "correcta" o ✗ para forzar "errónea" en una pregunta (override manual). Si no tocas nada, el resultado es el automático. Los overrides recalculan la nota.</p>
-            <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Clave (correcta)</th><th>Alumno</th><th>Resultado</th><th>Override</th></tr></thead><tbody>
-              {bubbleAnswers.map(row=>{
-                const key=answerKey[row.question];
-                const automatic = row.answer!==null && row.answer===key ? 'correct' : (row.answer===null?'blank':'wrong');
-                const verdict = overrides[row.question] ?? automatic;
-                const badge = verdict==='correct'?'✓':verdict==='wrong'?'✗':'·';
-                return <tr key={`cmp-${row.question}`}>
-                  <td>{row.question}</td>
-                  <td>{key??'—'}</td>
-                  <td>{row.answer??'en blanco'}</td>
-                  <td>{badge} {verdict}</td>
-                  <td><button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; if(n[row.question]) delete n[row.question]; else n[row.question]='correct'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✓</button>{' '}<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; n[row.question]='wrong'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✗</button>{overrides[row.question]&&<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; delete n[row.question]; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>limpiar</button>}</td>
-                </tr>;
-              })}
-            </tbody></table></div>
-          </details>}
           <label style={{display:'block',marginTop:12}}><input type="checkbox" checked={bubblesConfirmed} onChange={e=>{setBubblesConfirmed(e.target.checked);setBubbleGrade(null);}} /> He cotejado las {omrConfig?questionCount(omrConfig.template):bubbleAnswers.length} respuestas y la clave con los documentos originales.</label>
           <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Confirmar respuestas y previsualizar puntuación</button>
           {omrConfig&&<p className="small muted">Acierto {omrConfig.scoring.correct}; error {omrConfig.scoring.wrong}; blanco {omrConfig.scoring.blank}; escala {omrConfig.scoring.scale}.</p>}
@@ -815,7 +796,8 @@ export default function ReviewPage() {
                 </div>
                 <div>
                   <h3 className="small">Respuesta redactada por el LLM</h3>
-                  <p className="small muted">Puntos propuestos: {score?.points ?? validationPoints}</p>
+                  <p className="small muted">Puntos (editable):</p>
+                  <input type="number" step="0.1" min={0} value={validationPoints} onChange={(e) => setValidationPoints(Number(e.target.value))} style={{ width: '100%', marginBottom: 8 }} />
                   <textarea
                     rows={8}
                     style={{ width: '100%' }}
@@ -849,7 +831,7 @@ export default function ReviewPage() {
                       ...prev,
                       items: {
                         ...prev.items,
-                        [validationItem.id]: { points: Number(form?.items[validationItem.id]?.points) || 0, comment: validationComment },
+                        [validationItem.id]: { points: validationPoints, comment: validationComment },
                       },
                     } : prev);
                     setValidationItem(null);

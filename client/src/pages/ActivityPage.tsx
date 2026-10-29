@@ -845,7 +845,7 @@ export default function ActivityPage() {
                       disabled={submission.status === 'running' || submission.status === 'queued'}
                     />
                   </td>
-                  <td>{submission.studentName}{submission.dni ? <br /> : null}{submission.dni ? <span className="small muted">DNI {submission.dni}</span> : null}</td>
+                  <td>{submission.studentName}</td>
                   <td>
                     <span className={`badge ${submission.status}`}>
                       {STATUS_LABEL[submission.status] ?? submission.status}
