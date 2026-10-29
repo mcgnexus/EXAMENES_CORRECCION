@@ -7,7 +7,7 @@
   "functions": {
     "api/index.ts": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/@techstark/opencv-js/dist/**"
+      "includeFiles": "node_modules/@techstark/opencv-js/**"
     }
   }
 }
