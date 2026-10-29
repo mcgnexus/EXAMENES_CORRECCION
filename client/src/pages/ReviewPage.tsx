@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { EvaluationRow, SubmissionDetail } from '../../../shared/types';
+import type { EvaluationRow, SubmissionDetail, RubricItem } from '../../../shared/types';
 import { apiGet, apiSend, errorMessage, fileUrl } from '../api';
 import { questionCount,type OmrConfig } from '../../../shared/omr';
 import { CALIBRATION_LABELS,orderedCorners,project,type Point } from '../omrCalib';
@@ -67,6 +67,11 @@ export default function ReviewPage() {
   const [manualMode, setManualMode] = useState(false);
   const [manualPoints, setManualPoints] = useState<Point[]>([]);
   const [manualSuggest, setManualSuggest] = useState(false);
+  const [validationItem, setValidationItem] = useState<RubricItem | null>(null);
+  const [validationModel, setValidationModel] = useState<'primary' | 'independent'>('primary');
+  const [validationComment, setValidationComment] = useState('');
+  const [validationPoints, setValidationPoints] = useState(0);
+  const [validated, setValidated] = useState<Set<number>>(new Set());
 
   const load = async () => {
     const data = await apiGet<SubmissionDetail>(`/api/submissions/${submissionId}`);
@@ -592,7 +597,24 @@ export default function ReviewPage() {
                     <span className="badge">
                       máx. {rubricItem.maxPoints}
                       {divergent ? ' · divergencia' : ''}
+                      {validated.has(rubricItem.id) ? ' · validado' : ''}
                     </span>
+                    <button
+                      className="btn small"
+                      disabled={detail.evaluations.length === 0}
+                      onClick={() => {
+                        const primary = detail.evaluations.find((e) => e.role === 'primary' && e.status === 'done');
+                        const indep = detail.evaluations.find((e) => e.role === 'independent' && e.status === 'done');
+                        const chosen = primary ?? indep;
+                        const score = chosen?.items.find((i) => i.rubricItemId === rubricItem.id);
+                        setValidationModel(primary ? 'primary' : 'independent');
+                        setValidationComment(score?.comment ?? '');
+                        setValidationPoints(score?.points ?? 0);
+                        setValidationItem(rubricItem);
+                      }}
+                    >
+                      Validar visualmente
+                    </button>
                   </div>
 
                   <div className="model-grid">
@@ -733,6 +755,115 @@ export default function ReviewPage() {
         </div>
       </div>
 
+      {validationItem && (() => {
+        const primary = detail.evaluations.find((e) => e.role === 'primary' && e.status === 'done');
+        const indep = detail.evaluations.find((e) => e.role === 'independent' && e.status === 'done');
+        const chosen = validationModel === 'primary' ? (primary ?? indep) : (indep ?? primary);
+        const score = chosen?.items.find((i) => i.rubricItemId === validationItem.id);
+        const reading = chosen?.reading ?? null;
+        const hasPrimary = !!primary;
+        const hasIndep = !!indep;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+            onClick={() => setValidationItem(null)}
+          >
+            <div
+              className="card"
+              style={{ width: '90%', maxWidth: 900, maxHeight: '90vh', overflow: 'auto', background: '#fff' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="card-head">
+                <h2>Validación visual · {validationItem.title}</h2>
+                <button className="btn small" onClick={() => setValidationItem(null)}>Cerrar</button>
+              </div>
+              <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+                <span className="small muted">Modelo:</span>
+                <button
+                  className={`btn small${validationModel === 'primary' ? ' primary' : ''}`}
+                  disabled={!hasPrimary}
+                  onClick={() => {
+                    setValidationModel('primary');
+                    const s = primary?.items.find((i) => i.rubricItemId === validationItem.id);
+                    setValidationComment(s?.comment ?? '');
+                    setValidationPoints(s?.points ?? 0);
+                  }}
+                >
+                  Primario
+                </button>
+                <button
+                  className={`btn small${validationModel === 'independent' ? ' primary' : ''}`}
+                  disabled={!hasIndep}
+                  onClick={() => {
+                    setValidationModel('independent');
+                    const s = indep?.items.find((i) => i.rubricItemId === validationItem.id);
+                    setValidationComment(s?.comment ?? '');
+                    setValidationPoints(s?.points ?? 0);
+                  }}
+                >
+                  Independiente
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <h3 className="small">Respuesta del alumno (transcripción del LLM)</h3>
+                  <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto', background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
+                    {reading ?? 'Sin transcripción disponible para este modelo.'}
+                  </pre>
+                </div>
+                <div>
+                  <h3 className="small">Respuesta redactada por el LLM</h3>
+                  <p className="small muted">Puntos propuestos: {score?.points ?? validationPoints}</p>
+                  <textarea
+                    rows={8}
+                    style={{ width: '100%' }}
+                    value={validationComment}
+                    onChange={(e) => setValidationComment(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <button
+                  className="btn primary"
+                  onClick={() => {
+                    setForm((prev) => prev ? {
+                      ...prev,
+                      items: {
+                        ...prev.items,
+                        [validationItem.id]: { points: validationPoints, comment: validationComment },
+                      },
+                    } : prev);
+                    setValidated((prev) => new Set(prev).add(validationItem.id));
+                    setValidationItem(null);
+                    setNotice('Propuesta aceptada en el borrador. Guarda el borrador para persistir.');
+                  }}
+                >
+                  Aceptar propuesta
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setForm((prev) => prev ? {
+                      ...prev,
+                      items: {
+                        ...prev.items,
+                        [validationItem.id]: { points: Number(form?.items[validationItem.id]?.points) || 0, comment: validationComment },
+                      },
+                    } : prev);
+                    setValidationItem(null);
+                    setNotice('Comentario editado en el borrador. Guarda el borrador para persistir.');
+                  }}
+                >
+                  Guardar comentario editado
+                </button>
+                <button className="btn" onClick={() => setValidationItem(null)}>Cerrar sin cambios</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {notice && <div className="toast">{notice}</div>}
     </>
   );
