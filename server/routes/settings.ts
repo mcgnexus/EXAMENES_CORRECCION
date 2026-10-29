@@ -12,7 +12,7 @@ const providerConfig = z.object({
 
 const settingsSchema = z.object({
   primary: providerConfig,
-  independent: z.array(providerConfig).max(5),
+  independent: z.array(providerConfig).max(1),
   divergenceThreshold: z.number().min(0.1).max(20),
   concurrency: z.number().int().min(1).max(6),
   includeImages: z.boolean(),

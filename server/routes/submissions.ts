@@ -64,13 +64,13 @@ export async function registerSubmissionRoutes(app: FastifyInstance): Promise<vo
   app.post('/api/submissions/:id/grade-bubbles', async (request) => {
     const submissionId = Number((request.params as {id:string}).id);
     const submission = await assertSubmission(submissionId);
-    const body = z.object({answers:z.array(z.object({question:z.number().int().min(1).max(200), answer:z.string().regex(/^[A-H]$/).nullable()})).min(1).max(200), confirmed:z.literal(true),config:z.unknown()}).parse(request.body);
+    const body = z.object({answers:z.array(z.object({question:z.number().int().min(1).max(200), answer:z.string().regex(/^[A-H]$/).nullable()})).min(1).max(200), confirmed:z.literal(true),config:z.unknown(),overrides:z.record(z.enum(['correct','wrong'])).optional()}).parse(request.body);
     const config=await getOmrConfig(submission.activity_id);
     if(JSON.stringify(configSchema.parse(body.config))!==JSON.stringify(config)) throw conflict('La configuración ha cambiado: repite la detección y revisión.');
     // Preview only: never change submission status or claim that this is a saved grade.
     let result;
-    try{result=scoreAnswers(body.answers,config);}catch(error){throw badRequest(error instanceof Error?error.message:'Respuestas inválidas');}
-    await db.prepare('INSERT INTO submission_omr_answers(submission_id,answers,config,confirmed_at) VALUES($1,$2::jsonb,$3::jsonb,$4) ON CONFLICT(submission_id) DO UPDATE SET answers=EXCLUDED.answers,config=EXCLUDED.config,confirmed_at=EXCLUDED.confirmed_at').run(submissionId,JSON.stringify(body.answers),JSON.stringify(config),nowIso());
+    try{result=scoreAnswers(body.answers,config,body.overrides);}catch(error){throw badRequest(error instanceof Error?error.message:'Respuestas inválidas');}
+    await db.prepare('INSERT INTO submission_omr_answers(submission_id,answers,config,confirmed_at,overrides) VALUES($1,$2::jsonb,$3::jsonb,$4,$5::jsonb) ON CONFLICT(submission_id) DO UPDATE SET answers=EXCLUDED.answers,config=EXCLUDED.config,confirmed_at=EXCLUDED.confirmed_at,overrides=EXCLUDED.overrides').run(submissionId,JSON.stringify(body.answers),JSON.stringify(config),nowIso(),JSON.stringify(body.overrides??{}));
     return result;
   });
 

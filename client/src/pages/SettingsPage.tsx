@@ -166,7 +166,7 @@ export default function SettingsPage() {
           <h2>Evaluaciones independientes</h2>
           <button
             className="btn"
-            disabled={settings.independent.length >= 5}
+            disabled={settings.independent.length >= 1}
             onClick={() =>
               setSettings({
                 ...settings,

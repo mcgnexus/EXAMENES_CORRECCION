@@ -61,6 +61,7 @@ export default function ReviewPage() {
   const [omrConfig,setOmrConfig]=useState<OmrConfig|null>(null);
   const [testWorkflow,setTestWorkflow]=useState<{test:boolean;keyConfirmed:boolean;confirmed:boolean}|null>(null);
   const [bubblesConfirmed, setBubblesConfirmed] = useState(false);
+  const [overrides, setOverrides] = useState<Record<number,'correct'|'wrong'>>({});
   const [bubbleGrade, setBubbleGrade] = useState<{correct:number;wrong:number;blank:number;total:number;raw:number;scale:number}|null>(null);
   const [brush, setBrush] = useState('');
   const [manualMode, setManualMode] = useState(false);
@@ -159,6 +160,7 @@ export default function ReviewPage() {
       setAnswerKey(result.config.key);
       setBubblesConfirmed(false);
       setBubbleGrade(null);
+      setOverrides({});
       setTestWorkflow(prev=>prev?{...prev,confirmed:false}:prev);
       setNotice('Detección lista. Revisa y corrige cada fila antes de calificar.');
     } catch (err) {
@@ -234,7 +236,7 @@ export default function ReviewPage() {
     if (!bubbleAnswers || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')) return;
     const result = await apiSend<{correct:number; wrong:number; blank:number; total:number;raw:number;scale:number}>(
       `/api/submissions/${submissionId}/grade-bubbles`, 'POST',
-      { answers: bubbleAnswers.map(x => ({question:x.question, answer:x.answer})), config:omrConfig, confirmed:true },
+      { answers: bubbleAnswers.map(x => ({question:x.question, answer:x.answer})), config:omrConfig, confirmed:true, overrides },
     );
     setBubbleGrade(result);
     setTestWorkflow({test:true,keyConfirmed:true,confirmed:true});
@@ -367,6 +369,44 @@ export default function ReviewPage() {
             </tr>)}
           </tbody></table></div>
           {!omrConfig?.keyConfirmed&&<p className="notice">Confirma y guarda la clave en la actividad antes de calcular.</p>}
+          {omrConfig?.keyConfirmed&&<details open style={{marginTop:12}}>
+            <summary><strong>Comparación: clave correcta (izquierda) vs respuesta del alumno (derecha)</strong></summary>
+            <p className="small muted">Pulsa ✓ para forzar "correcta" o ✗ para forzar "errónea" en una pregunta (override manual). Si no tocas nada, el resultado es el automático. Los overrides recalculan la nota.</p>
+            <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Clave (correcta)</th><th>Alumno</th><th>Resultado</th><th>Override</th></tr></thead><tbody>
+              {bubbleAnswers.map(row=>{
+                const key=answerKey[row.question];
+                const automatic = row.answer!==null && row.answer===key ? 'correct' : (row.answer===null?'blank':'wrong');
+                const verdict = overrides[row.question] ?? automatic;
+                const badge = verdict==='correct'?'✓':verdict==='wrong'?'✗':'·';
+                return <tr key={`cmp-${row.question}`}>
+                  <td>{row.question}</td>
+                  <td>{key??'—'}</td>
+                  <td>{row.answer??'en blanco'}</td>
+                  <td>{badge} {verdict}</td>
+                  <td><button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; if(n[row.question]) delete n[row.question]; else n[row.question]='correct'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✓</button>{' '}<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; n[row.question]='wrong'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✗</button>{overrides[row.question]&&<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; delete n[row.question]; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>limpiar</button>}</td>
+                </tr>;
+              })}
+            </tbody></table></div>
+          </details>}
+          {omrConfig?.keyConfirmed&&<details open style={{marginTop:12}}>
+            <summary><strong>Comparación: clave correcta (izquierda) vs respuesta del alumno (derecha)</strong></summary>
+            <p className="small muted">Pulsa ✓ para forzar "correcta" o ✗ para forzar "errónea" en una pregunta (override manual). Si no tocas nada, el resultado es el automático. Los overrides recalculan la nota.</p>
+            <div className="scroll-x"><table><thead><tr><th>Pregunta</th><th>Clave (correcta)</th><th>Alumno</th><th>Resultado</th><th>Override</th></tr></thead><tbody>
+              {bubbleAnswers.map(row=>{
+                const key=answerKey[row.question];
+                const automatic = row.answer!==null && row.answer===key ? 'correct' : (row.answer===null?'blank':'wrong');
+                const verdict = overrides[row.question] ?? automatic;
+                const badge = verdict==='correct'?'✓':verdict==='wrong'?'✗':'·';
+                return <tr key={`cmp-${row.question}`}>
+                  <td>{row.question}</td>
+                  <td>{key??'—'}</td>
+                  <td>{row.answer??'en blanco'}</td>
+                  <td>{badge} {verdict}</td>
+                  <td><button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; if(n[row.question]) delete n[row.question]; else n[row.question]='correct'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✓</button>{' '}<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; n[row.question]='wrong'; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>✗</button>{overrides[row.question]&&<button className="btn small" onClick={()=>setOverrides(prev=>{const n={...prev}; delete n[row.question]; setBubblesConfirmed(false);setBubbleGrade(null); return n;})}>limpiar</button>}</td>
+                </tr>;
+              })}
+            </tbody></table></div>
+          </details>}
           <label style={{display:'block',marginTop:12}}><input type="checkbox" checked={bubblesConfirmed} onChange={e=>{setBubblesConfirmed(e.target.checked);setBubbleGrade(null);}} /> He cotejado las {omrConfig?questionCount(omrConfig.template):bubbleAnswers.length} respuestas y la clave con los documentos originales.</label>
           <button className="btn primary" style={{marginTop:12}} disabled={busy || !omrConfig?.keyConfirmed || !bubblesConfirmed || bubbleAnswers.some(x=>x.state==='ambiguous')} onClick={() => void run(calculateBubbleGrade)}>Confirmar respuestas y previsualizar puntuación</button>
           {omrConfig&&<p className="small muted">Acierto {omrConfig.scoring.correct}; error {omrConfig.scoring.wrong}; blanco {omrConfig.scoring.blank}; escala {omrConfig.scoring.scale}.</p>}

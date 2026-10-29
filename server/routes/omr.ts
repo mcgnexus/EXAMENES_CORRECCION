@@ -14,11 +14,12 @@ export async function confirmedOmrAnswers(submissionId:number,activityId:number)
   const enabled=await db.prepare('SELECT activity_id FROM activity_omr_config WHERE activity_id=$1').get(activityId);
   if(!enabled)return null;
   const config=await getOmrConfig(activityId);
-  const row=await db.prepare('SELECT answers,config FROM submission_omr_answers WHERE submission_id=$1').get<{answers:{question:number;answer:string|null}[];config:unknown}>(submissionId);
+  const row=await db.prepare('SELECT answers,config,overrides FROM submission_omr_answers WHERE submission_id=$1').get<{answers:{question:number;answer:string|null}[];config:unknown;overrides:Record<string,'correct'|'wrong'>|null}>(submissionId);
   if(!row)throw badRequest('Confirma primero las respuestas del detector de burbujas en la entrega. No se enviará la foto al LLM.');
   if(JSON.stringify(configSchema.parse(row.config))!==JSON.stringify(config))throw badRequest('La plantilla, clave o puntuación ha cambiado. Repite la detección y confirma las respuestas.');
-  scoreAnswers(row.answers,config);
-  return {answers:row.answers,config};
+  const overrides=row.overrides??{};
+  scoreAnswers(row.answers,config,overrides);
+  return {answers:row.answers,config,overrides};
 }
 export async function registerOmrRoutes(app:FastifyInstance){
   app.get('/api/activities/:id/workflow',async req=>{

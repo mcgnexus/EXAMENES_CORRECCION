@@ -18,11 +18,16 @@ export const configSchema=z.object({template:templateSchema,scoring:scoringSchem
 export type OmrConfig=z.infer<typeof configSchema>;
 export const defaultConfig:OmrConfig={template:defaultTemplate,scoring:{correct:1,wrong:-.33,blank:0,scale:50,floorAtZero:false},key:{},keyConfirmed:false};
 export function questionCount(t:OmrTemplate){return t.blocks.reduce((n,b)=>n+b.rows,0);}
-export function scoreAnswers(answers:{question:number;answer:string|null}[],config:OmrConfig){
+export function scoreAnswers(answers:{question:number;answer:string|null}[],config:OmrConfig,overrides?:Record<string,'correct'|'wrong'>){
   const c=configSchema.parse(config), count=questionCount(c.template);
   if(!c.keyConfirmed || answers.length!==count || new Set(answers.map(a=>a.question)).size!==count || answers.some(a=>!Number.isInteger(a.question)||a.question<1||a.question>count||(a.answer!==null&&(a.answer.length!==1||!c.template.options.includes(a.answer))))) throw new Error('Confirma una clave completa y revisa todas las preguntas únicas.');
-  const correct=answers.filter(a=>a.answer===c.key[String(a.question)]).length;
-  const blank=answers.filter(a=>a.answer===null).length, wrong=count-correct-blank;
+  let correct=0,wrong=0,blank=0;
+  for(const a of answers){
+    const override=overrides?.[String(a.question)];
+    const isCorrect = a.answer !== null && a.answer === c.key[String(a.question)];
+    const verdict = override ?? (isCorrect ? 'correct' : (a.answer === null ? 'blank' : 'wrong'));
+    if(verdict==='correct')correct++; else if(verdict==='wrong')wrong++; else blank++;
+  }
   const raw=correct*c.scoring.correct+wrong*c.scoring.wrong+blank*c.scoring.blank;
   const scaled=raw/(count*c.scoring.correct)*c.scoring.scale;
   return {correct,wrong,blank,raw:Math.round(raw*100)/100,total:Math.round((c.scoring.floorAtZero?Math.max(0,scaled):scaled)*100)/100,scale:c.scoring.scale};

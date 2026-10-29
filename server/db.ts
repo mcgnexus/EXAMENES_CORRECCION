@@ -196,6 +196,8 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     config JSONB NOT NULL,
     confirmed_at TEXT NOT NULL
   );`},
+  {id:'004_omr_overrides',sql:`ALTER TABLE submission_omr_answers ADD COLUMN IF NOT EXISTS overrides JSONB NOT NULL DEFAULT '{}'::jsonb;`},
+  {id:'004_omr_overrides',sql:`ALTER TABLE submission_omr_answers ADD COLUMN IF NOT EXISTS overrides JSONB NOT NULL DEFAULT '{}'::jsonb;`},
 ];
 
 type Runner = (sql: string, params: unknown[]) => Promise<QueryResult>;
@@ -326,7 +328,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   primary: { provider: 'simulado', model: 'simulado-v1' },
   independent: [
     { provider: 'simulado', model: 'simulado-v2' },
-    { provider: 'simulado', model: 'simulado-v3' },
   ],
   divergenceThreshold: 1,
   concurrency: 3,

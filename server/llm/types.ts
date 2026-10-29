@@ -68,7 +68,7 @@ export interface ProviderCallContext {
   signal?: AbortSignal;
 }
 
-export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'simulado';
+export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'deepseek' | 'simulado';
 
 export interface ProviderDefinition {
   id: ProviderId;

@@ -285,7 +285,7 @@ async function writeProposedGrade(
   }
 }
 
-interface OmrData { answers: { question: number; answer: string | null }[]; config: OmrConfig }
+interface OmrData { answers: { question: number; answer: string | null }[]; config: OmrConfig; overrides?: Record<string,'correct'|'wrong'> }
 
 /**
  * Corrección determinista para entregas de test: la nota SIEMPRE sale de las
@@ -299,7 +299,7 @@ async function correctOmrSubmission(
   subject: string,
   omr: OmrData,
 ): Promise<void> {
-  const score = scoreAnswers(omr.answers, omr.config);
+  const score = scoreAnswers(omr.answers, omr.config, omr.overrides ?? {});
   const settings = await getSettings();
   const created = await db
     .prepare(

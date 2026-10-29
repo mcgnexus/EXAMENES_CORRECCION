@@ -579,6 +579,100 @@ const geminiProvider: ProviderDefinition = {
   },
 };
 
+// --------------------------------------------------------------- DeepSeek
+
+function deepseekImagesNote(images: { label: string }[]): unknown[] {
+  if (images.length === 0) return [];
+  return [{
+    type: 'text',
+    text: `DeepSeek no procesa imágenes: se omiten ${images.length} imagen(es) (${images.map((i) => i.label).join('; ')}). Trabaja solo con el texto disponible y señálalo en tus comentarios si afecta a la respuesta.`,
+  }];
+}
+
+async function deepseekChat(
+  messages: unknown[],
+  ctx: ProviderCallContext,
+  options: { json?: boolean; temperature?: number; maxTokens?: number } = {},
+): Promise<string> {
+  const response = await fetchWithRetry('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${ctx.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: ctx.model || 'deepseek-chat',
+      temperature: options.temperature ?? 0,
+      max_tokens: options.maxTokens,
+      ...(options.json ? { response_format: { type: 'json_object' } } : {}),
+      messages,
+    }),
+    signal: ctx.signal ?? timeoutSignal(),
+  });
+  if (!response.ok) throw await readError(response);
+  const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+const deepseekProvider: ProviderDefinition = {
+  id: 'deepseek',
+  name: 'DeepSeek',
+  requiresKey: true,
+  keyVariable: 'DEEPSEEK_API_KEY',
+  defaultModel: 'deepseek-chat',
+  async evaluate(input, ctx) {
+    const text = await deepseekChat(
+      [
+        { role: 'system', content: buildSystemPrompt(input) },
+        { role: 'user', content: [{ type: 'text', text: buildUserPrompt(input) }, ...deepseekImagesNote(input.images)] },
+      ],
+      ctx,
+      { json: true },
+    );
+    return parseGradingResponse(text, input);
+  },
+  async scan(input, ctx) {
+    const text = await deepseekChat(
+      [
+        { role: 'system', content: buildScanSystemPrompt(input.esperado) },
+        { role: 'user', content: [{ type: 'text', text: buildScanUserPrompt(input.esperado, 0, input.contexto) }, ...deepseekImagesNote(input.images)] },
+      ],
+      ctx,
+      { json: true },
+    );
+    return parseScanResponse(text);
+  },
+  async read(input, ctx) {
+    const text = await deepseekChat(
+      [
+        { role: 'system', content: input.instructions ?? buildReadSystemPrompt(input.subject) },
+        { role: 'user', content: [{ type: 'text', text: input.context ?? buildReadUserPrompt(input.images.length) }, ...deepseekImagesNote(input.images)] },
+      ],
+      ctx,
+    );
+    return { text };
+  },
+  async solve(input, ctx) {
+    const text = await deepseekChat(
+      [
+        { role: 'system', content: buildSolveSystemPrompt(input.subject) },
+        { role: 'user', content: [{ type: 'text', text: buildSolveUserPrompt(input.enunciado, input.apartados, 0) }, ...deepseekImagesNote(input.images)] },
+      ],
+      ctx,
+      { temperature: 0.2, maxTokens: 8000 },
+    );
+    return { respuestas: text };
+  },
+  async ping(ctx) {
+    const text = await deepseekChat(
+      [{ role: 'user', content: 'Responde solo: OK' }],
+      { ...ctx, signal: AbortSignal.timeout(30_000) },
+      { maxTokens: 5 },
+    );
+    return `Conexión correcta con DeepSeek (${text.trim() || 'sin respuesta'})`;
+  },
+};
+
 // --------------------------------------------------------------- Simulado
 
 function hashString(value: string): number {
@@ -684,6 +778,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDefinition> = {
   openai: openaiProvider,
   anthropic: anthropicProvider,
   gemini: geminiProvider,
+  deepseek: deepseekProvider,
   simulado: simuladoProvider,
 };
 
