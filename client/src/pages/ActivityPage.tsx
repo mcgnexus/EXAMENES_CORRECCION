@@ -216,7 +216,7 @@ export default function ActivityPage() {
 
   async function uploadSubmission(files: File[]) {
     const target = uploadTargetRef.current ?? uploadTarget;
-    if (!target) { setRetouchFiles(null); return; }
+    if (!target) { setRetouchFiles(null); setError('No se ha seleccionado alumno: vuelve a pulsar "Subir fotos/PDF" en la fila del alumno.'); return; }
     uploadTargetRef.current = null;
     setRetouchFiles(null);
     setUploadTarget(null);
@@ -239,13 +239,8 @@ export default function ActivityPage() {
       setUploadTarget(null);
       return;
     }
-    const list = Array.from(files);
-    // Las fotos pasan por el editor de retoque antes de subirse.
-    if (list.some((file) => file.type.startsWith('image/'))) {
-      setRetouchFiles(list);
-      return;
-    }
-    await uploadSubmission(list);
+  const list = Array.from(files);
+  await uploadSubmission(list);
   }
 
   async function handleDocument(files: FileList | null, input: HTMLInputElement) {
