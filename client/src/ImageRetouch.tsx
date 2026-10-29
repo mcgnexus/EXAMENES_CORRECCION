@@ -127,8 +127,7 @@ export default function ImageRetouch({ files, onCancel, onApply }: {
   }
 
   async function apply() {
-    if (!entries.length) { alert('entries vacío'); return; }
-    alert('apply start, entries=' + entries.length);
+    if (!entries.length) return;
     setApplying(true);
     setError('');
     try {
