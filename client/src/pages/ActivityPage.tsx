@@ -102,6 +102,7 @@ export default function ActivityPage() {
   const docInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [uploadTarget, setUploadTarget] = useState<StudentRow | null>(null);
+  const uploadTargetRef = useRef<StudentRow | null>(null);
   const [retouchFiles, setRetouchFiles] = useState<File[] | null>(null);
 
   const refresh = useCallback(
@@ -208,13 +209,15 @@ export default function ActivityPage() {
   }
 
   function startUpload(student: StudentRow) {
+    uploadTargetRef.current = student;
     setUploadTarget(student);
     uploadInput.current?.click();
   }
 
   async function uploadSubmission(files: File[]) {
-    const target = uploadTarget;
-    if (!target) return;
+    const target = uploadTargetRef.current ?? uploadTarget;
+    if (!target) { setRetouchFiles(null); return; }
+    uploadTargetRef.current = null;
     setRetouchFiles(null);
     setUploadTarget(null);
     await run(async () => {
@@ -376,6 +379,7 @@ export default function ActivityPage() {
         <ImageRetouch
           files={retouchFiles}
           onCancel={() => {
+            uploadTargetRef.current = null;
             setRetouchFiles(null);
             setUploadTarget(null);
             if (uploadInput.current) uploadInput.current.value = '';

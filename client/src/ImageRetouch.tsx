@@ -44,7 +44,7 @@ function drawEdited(
 export default function ImageRetouch({ files, onCancel, onApply }: {
   files: File[];
   onCancel: () => void;
-  onApply: (files: File[]) => void;
+  onApply: (files: File[]) => void | Promise<void>;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [index, setIndex] = useState(0);
@@ -146,7 +146,7 @@ export default function ImageRetouch({ files, onCancel, onApply }: {
         if (!blob) throw new Error(`No se ha podido procesar «${entry.file.name}»`);
         result.push(new File([blob], entry.file.name, { type }));
       }
-      onApply(result);
+      await Promise.resolve(onApply(result));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al procesar las imágenes');
     } finally {
