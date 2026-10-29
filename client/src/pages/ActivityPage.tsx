@@ -240,6 +240,11 @@ export default function ActivityPage() {
       return;
     }
   const list = Array.from(files);
+  // Las fotos pasan por el editor de retoque antes de subirse.
+  if (list.some((file) => file.type.startsWith('image/'))) {
+    setRetouchFiles(list);
+    return;
+  }
   await uploadSubmission(list);
   }
 
